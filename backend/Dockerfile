@@ -1,4 +1,4 @@
-FROM python:3.12-slim
+FROM python:3.10-slim
 
 WORKDIR /app
 
@@ -11,11 +11,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy pipeline code
-COPY pipeline.py .
+# Copy application code
+COPY app.py .
 
-# Create models directory (will be populated during training)
-RUN mkdir -p /app/models
+# Create directories for models and HDFS storage
+RUN mkdir -p /workspace/models /workspace/hdfs_storage /workspace/pipelines
 
-# Default command - train a model
-CMD ["python", "pipeline.py"]
+# Expose port
+EXPOSE 5000
+
+# Run the application
+CMD ["python", "app.py"]

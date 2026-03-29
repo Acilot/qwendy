@@ -1,85 +1,34 @@
 version: '3.8'
 
 services:
-  # Main MLOps Platform (Web Interface + API)
-  mlops-platform:
-    build:
-      context: ./web_interface
-      dockerfile: Dockerfile
-    container_name: mlops-platform
-    ports:
-      - "8080:8080"
+  backend:
+    build: ./backend
+    container_name: mlops-backend
     volumes:
-      - models-data:/app/models
-    environment:
-      - PYTHONUNBUFFERED=1
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/api/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 10s
-    depends_on:
-      - inference-service
-    networks:
-      - mlops-network
-
-  # Inference Service (dedicated)
-  inference-service:
-    build:
-      context: ./inference_service
-      dockerfile: Dockerfile
-    container_name: inference-service
+      - ./models:/workspace/models
+      - ./hdfs_storage:/workspace/hdfs_storage
+      - ./pipelines:/workspace/pipelines
     ports:
       - "5000:5000"
-    volumes:
-      - models-data:/app/models
     environment:
-      - PYTHONUNBUFFERED=1
-      - MODELS_DIR=/app/models
+      - FLASK_ENV=production
+    restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:5000/health')"]
+      test: ["CMD", "curl", "-f", "http://localhost:5000/api/stats"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 10s
-    networks:
-      - mlops-network
 
-  # ML Pipeline (Training)
-  ml-pipeline:
-    build:
-      context: ./ml_pipeline
-      dockerfile: Dockerfile
-    container_name: ml-pipeline
-    volumes:
-      - models-data:/app/models
-    environment:
-      - PYTHONUNBUFFERED=1
-    networks:
-      - mlops-network
-
-  # Hadoop Integration (HDFS simulation)
-  hadoop-integration:
-    build:
-      context: ./hadoop_integration
-      dockerfile: Dockerfile
-    container_name: hadoop-integration
-    volumes:
-      - hdfs-data:/tmp/hdfs
-      - models-data:/app/models
-    environment:
-      - PYTHONUNBUFFERED=1
-      - HDFS_ROOT=/tmp/hdfs
-    networks:
-      - mlops-network
+  frontend:
+    build: ./frontend
+    container_name: mlops-frontend
+    ports:
+      - "8080:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
 
 volumes:
-  models-data:
-    driver: local
-  hdfs-data:
-    driver: local
-
-networks:
-  mlops-network:
-    driver: bridge
+  models_data:
+  hdfs_data:
+  pipelines_data:
