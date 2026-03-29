@@ -36,6 +36,7 @@ services:
       - models-data:/app/models
     environment:
       - PYTHONUNBUFFERED=1
+      - MODELS_DIR=/app/models
     healthcheck:
       test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:5000/health')"]
       interval: 30s

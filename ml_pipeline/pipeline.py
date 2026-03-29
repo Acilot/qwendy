@@ -64,26 +64,45 @@ class MLPipeline:
         return self.model_info
     
     def save_model(self, version=None):
-        """Save model to disk"""
+        """Save model to disk in both .pkl and .joblib formats for compatibility"""
         if self.model is None:
             raise ValueError("No model to save. Train first.")
         
         if version is None:
             version = datetime.now().strftime("%Y%m%d_%H%M%S")
         
-        model_path = os.path.join(self.models_dir, f"model_{version}.pkl")
+        # Save in .pkl format (legacy)
+        model_path_pkl = os.path.join(self.models_dir, f"model_{version}.pkl")
+        # Save in .joblib format (for inference service)
+        model_path_joblib = os.path.join(self.models_dir, f"model_{version}.joblib")
+        
         info_path = os.path.join(self.models_dir, f"info_{version}.json")
         
-        joblib.dump(self.model, model_path)
+        joblib.dump(self.model, model_path_pkl)
+        joblib.dump(self.model, model_path_joblib)
+        
         with open(info_path, 'w') as f:
             json.dump(self.model_info, f, indent=2)
         
-        # Save latest marker
-        latest_info = {"latest_version": version, "model_path": model_path}
+        # Save latest marker (point to joblib version)
+        latest_info = {
+            "latest_version": version, 
+            "model_path": model_path_joblib,
+            "model_path_pkl": model_path_pkl
+        }
         with open(os.path.join(self.models_dir, "latest.json"), 'w') as f:
             json.dump(latest_info, f, indent=2)
         
-        print(f"Model saved to {model_path}")
+        # Create symlink or copy for model_latest.joblib
+        latest_model_path = os.path.join(self.models_dir, "model_latest.joblib")
+        latest_info_path = os.path.join(self.models_dir, "model_latest_info.json")
+        
+        # Copy the latest model
+        import shutil
+        shutil.copy2(model_path_joblib, latest_model_path)
+        shutil.copy2(info_path, latest_info_path)
+        
+        print(f"Model saved to {model_path_joblib} (and {model_path_pkl})")
         return version
     
     def load_model(self, version="latest"):
