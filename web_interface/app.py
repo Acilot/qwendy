@@ -11,11 +11,11 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from ml_pipeline.pipeline import MLPipeline
 
 app = Flask(__name__, 
-            static_folder='/app/web_interface',
+            static_folder='web_interface',
             static_url_path='')
 
-# Use environment variable or default to /app/models
-MODELS_DIR = os.environ.get('MODELS_DIR', '/app/models')
+# Use environment variable or default to ./models
+MODELS_DIR = os.environ.get('MODELS_DIR', './models')
 pipeline = MLPipeline(models_dir=MODELS_DIR)
 
 # Auto-load latest model on startup
@@ -29,7 +29,7 @@ except FileNotFoundError:
 # Serve web interface
 @app.route('/')
 def serve_index():
-    return send_from_directory('/app/web_interface', 'index.html')
+    return send_from_directory('web_interface', 'index.html')
 
 
 # API endpoints

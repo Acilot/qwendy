@@ -13,9 +13,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy pipeline code
 COPY pipeline.py .
-COPY models/ ./models/ 2>/dev/null || true
 
-# Create models directory
+# Create models directory (will be populated during training)
 RUN mkdir -p /app/models
 
 # Default command - train a model
