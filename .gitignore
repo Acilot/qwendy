@@ -1,69 +1,56 @@
 ```
-# Model files
+# Machine Learning Models and Pipelines
 *.joblib
 *.pkl
+*.pickle
+
+# Build and distribution artifacts
+dist/
+build/
+target/
+
+# Dependencies
+.venv/
+venv/
+env/
+node_modules/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+*.temp
 
 # Environment files
 .env
 .env.local
 *.env.*
 
-# Dependencies
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-.Python
-env/
-venv/
-.venv/
-pip-log.txt
-pip-delete-this-directory.txt
-.tox/
-.coverage
-.coverage.*
-.cache
-nosetests.xml
-coverage.xml
-*.cover
-*.log
-*.tmp
+# IDE and editor files
+.vscode/
+.idea/
 *.swp
 *.swo
+
+# OS generated files
 .DS_Store
 Thumbs.db
 
-# Docker
-.dockerenv
+# Coverage reports
+coverage/
+htmlcov/
+.coverage
 
-# ML specific
-models/
-!models/.gitkeep
-hdfs_storage/
-!hdfs_storage/.gitkeep
-
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-
-# Logs
-*.log
+# Test and cache directories
+.pytest_cache/
+.mypy_cache/
+.julia/
+zig*/
 ```

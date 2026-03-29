@@ -1,0 +1,900 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MLOps Platform - Real HDFS</title>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        .gradient-bg { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); }
+        .card-hover { transition: all 0.3s ease; }
+        .card-hover:hover { transform: translateY(-5px); box-shadow: 0 20px 40px rgba(0,0,0,0.1); }
+        .stage-running { border-left: 4px solid #3b82f6; }
+        .stage-completed { border-left: 4px solid #10b981; }
+        .stage-failed { border-left: 4px solid #ef4444; }
+        .stage-pending { border-left: 4px solid #9ca3af; }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+        .pulse { animation: pulse 2s infinite; }
+        .log-entry { font-family: 'Courier New', monospace; font-size: 0.85rem; }
+    </style>
+</head>
+<body class="bg-gray-100 min-h-screen">
+    <div id="app">
+        <!-- Login Screen -->
+        <div v-if="!isLoggedIn" class="min-h-screen flex items-center justify-center gradient-bg">
+            <div class="bg-white p-8 rounded-2xl shadow-2xl w-96">
+                <h1 class="text-3xl font-bold text-center mb-2 text-gray-800">MLOps Platform</h1>
+                <p class="text-center text-gray-500 mb-8">Real HDFS Integration</p>
+                <form @submit.prevent="login">
+                    <div class="mb-4">
+                        <label class="block text-gray-700 mb-2">Username</label>
+                        <input v-model="loginForm.username" type="text" class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500" placeholder="admin">
+                    </div>
+                    <div class="mb-6">
+                        <label class="block text-gray-700 mb-2">Password</label>
+                        <input v-model="loginForm.password" type="password" class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500" placeholder="999999">
+                    </div>
+                    <button type="submit" class="w-full gradient-bg text-white py-3 rounded-lg font-semibold hover:opacity-90 transition">Login</button>
+                    <p v-if="loginError" class="text-red-500 text-center mt-4">{{ loginError }}</p>
+                </form>
+            </div>
+        </div>
+
+        <!-- Main App -->
+        <div v-else class="flex min-h-screen">
+            <!-- Sidebar -->
+            <div class="w-64 bg-gray-900 text-white">
+                <div class="p-6">
+                    <h1 class="text-2xl font-bold"><i class="fas fa-brain mr-2"></i>MLOps</h1>
+                    <p class="text-gray-400 text-sm mt-1">Real HDFS Platform</p>
+                </div>
+                <nav class="mt-6">
+                    <a @click="currentTab = 'dashboard'" :class="{'bg-gray-800': currentTab === 'dashboard'}" class="block px-6 py-3 cursor-pointer hover:bg-gray-800 transition"><i class="fas fa-chart-line w-6"></i> Dashboard</a>
+                    <a @click="currentTab = 'pipelines'" :class="{'bg-gray-800': currentTab === 'pipelines'}" class="block px-6 py-3 cursor-pointer hover:bg-gray-800 transition"><i class="fas fa-project-diagram w-6"></i> Pipelines</a>
+                    <a @click="currentTab = 'models'" :class="{'bg-gray-800': currentTab === 'models'}" class="block px-6 py-3 cursor-pointer hover:bg-gray-800 transition"><i class="fas fa-robot w-6"></i> Models</a>
+                    <a @click="currentTab = 'hdfs'" :class="{'bg-gray-800': currentTab === 'hdfs'}" class="block px-6 py-3 cursor-pointer hover:bg-gray-800 transition"><i class="fas fa-database w-6"></i> HDFS Browser</a>
+                    <a @click="currentTab = 'upload'" :class="{'bg-gray-800': currentTab === 'upload'}" class="block px-6 py-3 cursor-pointer hover:bg-gray-800 transition"><i class="fas fa-upload w-6"></i> Upload Model</a>
+                </nav>
+                <div class="absolute bottom-0 w-64 p-6 bg-gray-800">
+                    <div class="flex items-center">
+                        <div class="w-10 h-10 rounded-full gradient-bg flex items-center justify-center font-bold">{{ user.username.charAt(0).toUpperCase() }}</div>
+                        <div class="ml-3">
+                            <p class="font-semibold">{{ user.username }}</p>
+                            <p class="text-xs text-gray-400">{{ user.role }}</p>
+                        </div>
+                    </div>
+                    <button @click="logout" class="mt-3 text-sm text-red-400 hover:text-red-300"><i class="fas fa-sign-out-alt mr-1"></i> Logout</button>
+                </div>
+            </div>
+
+            <!-- Main Content -->
+            <div class="flex-1 overflow-auto">
+                <header class="bg-white shadow-sm px-8 py-4">
+                    <div class="flex justify-between items-center">
+                        <h2 class="text-2xl font-bold text-gray-800">{{ tabTitle }}</h2>
+                        <div class="flex items-center space-x-4">
+                            <div v-if="hdfsStatus.connected" class="flex items-center text-green-600">
+                                <i class="fas fa-check-circle mr-2"></i>
+                                <span class="text-sm font-medium">HDFS Connected</span>
+                            </div>
+                            <div v-else class="flex items-center text-red-600">
+                                <i class="fas fa-exclamation-circle mr-2"></i>
+                                <span class="text-sm font-medium">HDFS Disconnected</span>
+                            </div>
+                        </div>
+                    </div>
+                </header>
+
+                <main class="p-8">
+                    <!-- Dashboard Tab -->
+                    <div v-if="currentTab === 'dashboard'" class="space-y-6">
+                        <div class="grid grid-cols-1 md:grid-cols-4 gap-6">
+                            <div class="bg-white p-6 rounded-xl shadow-sm card-hover">
+                                <div class="flex items-center justify-between">
+                                    <div>
+                                        <p class="text-gray-500 text-sm">Total Pipelines</p>
+                                        <p class="text-3xl font-bold text-gray-800">{{ pipelines.length }}</p>
+                                    </div>
+                                    <div class="w-12 h-12 rounded-full bg-blue-100 flex items-center justify-center text-blue-600"><i class="fas fa-project-diagram"></i></div>
+                                </div>
+                            </div>
+                            <div class="bg-white p-6 rounded-xl shadow-sm card-hover">
+                                <div class="flex items-center justify-between">
+                                    <div>
+                                        <p class="text-gray-500 text-sm">Models in HDFS</p>
+                                        <p class="text-3xl font-bold text-gray-800">{{ hdfsModelsCount }}</p>
+                                    </div>
+                                    <div class="w-12 h-12 rounded-full bg-green-100 flex items-center justify-center text-green-600"><i class="fas fa-database"></i></div>
+                                </div>
+                            </div>
+                            <div class="bg-white p-6 rounded-xl shadow-sm card-hover">
+                                <div class="flex items-center justify-between">
+                                    <div>
+                                        <p class="text-gray-500 text-sm">HDFS Storage Used</p>
+                                        <p class="text-3xl font-bold text-gray-800">{{ formatBytes(hdfsTotalSize) }}</p>
+                                    </div>
+                                    <div class="w-12 h-12 rounded-full bg-purple-100 flex items-center justify-center text-purple-600"><i class="fas fa-hdd"></i></div>
+                                </div>
+                            </div>
+                            <div class="bg-white p-6 rounded-xl shadow-sm card-hover">
+                                <div class="flex items-center justify-between">
+                                    <div>
+                                        <p class="text-gray-500 text-sm">Success Rate</p>
+                                        <p class="text-3xl font-bold text-gray-800">{{ successRate }}%</p>
+                                    </div>
+                                    <div class="w-12 h-12 rounded-full bg-yellow-100 flex items-center justify-center text-yellow-600"><i class="fas fa-percentage"></i></div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Recent Activity -->
+                        <div class="bg-white rounded-xl shadow-sm p-6">
+                            <h3 class="text-lg font-bold text-gray-800 mb-4">Recent Pipeline Activity</h3>
+                            <div v-if="pipelines.length === 0" class="text-gray-500 text-center py-8">No pipelines yet. Create your first pipeline!</div>
+                            <div v-else class="space-y-4">
+                                <div v-for="pipeline in recentPipelines" :key="pipeline.id" class="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
+                                    <div class="flex items-center space-x-4">
+                                        <div :class="{
+                                            'bg-green-100 text-green-600': pipeline.status === 'completed',
+                                            'bg-red-100 text-red-600': pipeline.status === 'failed',
+                                            'bg-blue-100 text-blue-600': ['running', 'created'].includes(pipeline.status)
+                                        }" class="w-10 h-10 rounded-full flex items-center justify-center">
+                                            <i :class="{
+                                                'fas fa-check': pipeline.status === 'completed',
+                                                'fas fa-times': pipeline.status === 'failed',
+                                                'fas fa-spinner fa-spin': pipeline.status === 'running'
+                                            }"></i>
+                                        </div>
+                                        <div>
+                                            <p class="font-semibold text-gray-800">{{ pipeline.name }}</p>
+                                            <p class="text-sm text-gray-500">{{ pipeline.model_type }} • {{ new Date(pipeline.created_at).toLocaleString() }}</p>
+                                        </div>
+                                    </div>
+                                    <div class="text-right">
+                                        <span :class="{
+                                            'bg-green-100 text-green-700': pipeline.status === 'completed',
+                                            'bg-red-100 text-red-700': pipeline.status === 'failed',
+                                            'bg-blue-100 text-blue-700': ['running', 'created'].includes(pipeline.status)
+                                        }" class="px-3 py-1 rounded-full text-sm font-medium">{{ pipeline.status }}</span>
+                                        <p v-if="pipeline.metrics.accuracy" class="text-sm text-gray-500 mt-1">Accuracy: {{ (pipeline.metrics.accuracy * 100).toFixed(1) }}%</p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- HDFS Cluster Info -->
+                        <div v-if="hdfsStatus.cluster_info" class="bg-white rounded-xl shadow-sm p-6">
+                            <h3 class="text-lg font-bold text-gray-800 mb-4">HDFS Cluster Status</h3>
+                            <div class="grid grid-cols-3 gap-4">
+                                <div class="text-center p-4 bg-blue-50 rounded-lg">
+                                    <p class="text-gray-500 text-sm">Used Space</p>
+                                    <p class="text-xl font-bold text-blue-600">{{ formatBytes(hdfsStatus.cluster_info.used) }}</p>
+                                </div>
+                                <div class="text-center p-4 bg-green-50 rounded-lg">
+                                    <p class="text-gray-500 text-sm">Free Space</p>
+                                    <p class="text-xl font-bold text-green-600">{{ formatBytes(hdfsStatus.cluster_info.free) }}</p>
+                                </div>
+                                <div class="text-center p-4 bg-purple-50 rounded-lg">
+                                    <p class="text-gray-500 text-sm">Capacity</p>
+                                    <p class="text-xl font-bold text-purple-600">{{ formatBytes(hdfsStatus.cluster_info.capacity) }}</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Pipelines Tab -->
+                    <div v-if="currentTab === 'pipelines'" class="space-y-6">
+                        <div class="flex justify-between items-center">
+                            <h3 class="text-xl font-bold text-gray-800">ML Pipelines</h3>
+                            <button @click="showCreatePipeline = true" class="gradient-bg text-white px-6 py-3 rounded-lg font-semibold hover:opacity-90 transition">
+                                <i class="fas fa-plus mr-2"></i>Create Pipeline
+                            </button>
+                        </div>
+
+                        <!-- Pipeline List -->
+                        <div class="space-y-4">
+                            <div v-for="pipeline in pipelines" :key="pipeline.id" class="bg-white rounded-xl shadow-sm overflow-hidden">
+                                <div class="p-6">
+                                    <div class="flex justify-between items-start mb-4">
+                                        <div>
+                                            <h4 class="text-lg font-bold text-gray-800">{{ pipeline.name }}</h4>
+                                            <p class="text-gray-500 text-sm">{{ pipeline.model_type }} • ID: {{ pipeline.id }}</p>
+                                        </div>
+                                        <div class="flex items-center space-x-2">
+                                            <span :class="{
+                                                'bg-green-100 text-green-700': pipeline.status === 'completed',
+                                                'bg-red-100 text-red-700': pipeline.status === 'failed',
+                                                'bg-blue-100 text-blue-700': ['running', 'created'].includes(pipeline.status)
+                                            }" class="px-3 py-1 rounded-full text-sm font-medium">{{ pipeline.status }}</span>
+                                            <button @click="viewPipelineDetails(pipeline)" class="text-blue-600 hover:text-blue-800">
+                                                <i class="fas fa-eye"></i>
+                                            </button>
+                                        </div>
+                                    </div>
+
+                                    <!-- Progress Bar -->
+                                    <div class="mb-4">
+                                        <div class="flex justify-between text-sm mb-1">
+                                            <span class="text-gray-600">Progress</span>
+                                            <span class="text-gray-800 font-medium">{{ pipeline.progress }}%</span>
+                                        </div>
+                                        <div class="w-full bg-gray-200 rounded-full h-2">
+                                            <div :style="{ width: pipeline.progress + '%' }" class="gradient-bg h-2 rounded-full transition-all duration-500"></div>
+                                        </div>
+                                    </div>
+
+                                    <!-- Metrics -->
+                                    <div v-if="pipeline.metrics.accuracy" class="grid grid-cols-4 gap-4 mt-4 pt-4 border-t">
+                                        <div class="text-center">
+                                            <p class="text-gray-500 text-xs">Accuracy</p>
+                                            <p class="text-lg font-bold text-green-600">{{ (pipeline.metrics.accuracy * 100).toFixed(1) }}%</p>
+                                        </div>
+                                        <div class="text-center">
+                                            <p class="text-gray-500 text-xs">Precision</p>
+                                            <p class="text-lg font-bold text-blue-600">{{ (pipeline.metrics.precision * 100).toFixed(1) }}%</p>
+                                        </div>
+                                        <div class="text-center">
+                                            <p class="text-gray-500 text-xs">Recall</p>
+                                            <p class="text-lg font-bold text-purple-600">{{ (pipeline.metrics.recall * 100).toFixed(1) }}%</p>
+                                        </div>
+                                        <div class="text-center">
+                                            <p class="text-gray-500 text-xs">F1 Score</p>
+                                            <p class="text-lg font-bold text-orange-600">{{ (pipeline.metrics.f1 * 100).toFixed(1) }}%</p>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Pipeline Details Modal -->
+                    <div v-if="selectedPipeline" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+                        <div class="bg-white rounded-2xl max-w-4xl w-full max-h-[90vh] overflow-auto">
+                            <div class="p-6 border-b">
+                                <div class="flex justify-between items-center">
+                                    <h3 class="text-xl font-bold text-gray-800">{{ selectedPipeline.name }}</h3>
+                                    <button @click="selectedPipeline = null" class="text-gray-500 hover:text-gray-700"><i class="fas fa-times text-xl"></i></button>
+                                </div>
+                            </div>
+                            <div class="p-6">
+                                <!-- Stages -->
+                                <div class="space-y-4 mb-6">
+                                    <h4 class="font-bold text-gray-700 mb-3">Pipeline Stages</h4>
+                                    <div v-for="(stage, index) in selectedPipeline.stages" :key="index" 
+                                         :class="{
+                                             'stage-running bg-blue-50': stage.status === 'running',
+                                             'stage-completed bg-green-50': stage.status === 'completed',
+                                             'stage-failed bg-red-50': stage.status === 'failed',
+                                             'stage-pending bg-gray-50': stage.status === 'pending'
+                                         }"
+                                         class="p-4 rounded-lg">
+                                        <div class="flex items-center justify-between mb-2">
+                                            <div class="flex items-center space-x-3">
+                                                <span class="w-8 h-8 rounded-full flex items-center justify-center font-bold text-sm"
+                                                      :class="{
+                                                          'bg-green-500 text-white': stage.status === 'completed',
+                                                          'bg-red-500 text-white': stage.status === 'failed',
+                                                          'bg-blue-500 text-white animate-pulse': stage.status === 'running',
+                                                          'bg-gray-300 text-gray-600': stage.status === 'pending'
+                                                      }">
+                                                    {{ index + 1 }}
+                                                </span>
+                                                <span class="font-semibold text-gray-800">{{ stage.name }}</span>
+                                            </div>
+                                            <span :class="{
+                                                'text-green-600': stage.status === 'completed',
+                                                'text-red-600': stage.status === 'failed',
+                                                'text-blue-600': stage.status === 'running',
+                                                'text-gray-500': stage.status === 'pending'
+                                            }" class="text-sm font-medium capitalize">{{ stage.status }}</span>
+                                        </div>
+                                        <!-- Logs -->
+                                        <div v-if="stage.logs.length > 0" class="ml-11 mt-2 space-y-1">
+                                            <div v-for="(log, logIndex) in stage.logs" :key="logIndex" class="log-entry text-gray-600 bg-white p-2 rounded">
+                                                {{ log }}
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- Test Model Section -->
+                                <div v-if="selectedPipeline.status === 'completed'" class="border-t pt-6">
+                                    <h4 class="font-bold text-gray-700 mb-3">Test Model</h4>
+                                    <button @click="testModelFromPipeline(selectedPipeline)" 
+                                            class="gradient-bg text-white px-6 py-2 rounded-lg font-medium hover:opacity-90 transition">
+                                        <i class="fas fa-flask mr-2"></i>Run Test Inference
+                                    </button>
+                                    
+                                    <div v-if="testResults" class="mt-4">
+                                        <h5 class="font-semibold text-gray-700 mb-2">Test Results (5 samples)</h5>
+                                        <div class="space-y-2">
+                                            <div v-for="result in testResults" :key="result.sample_id" class="bg-gray-50 p-3 rounded-lg">
+                                                <div class="flex justify-between items-center">
+                                                    <span class="text-sm text-gray-600">Sample {{ result.sample_id }}</span>
+                                                    <span class="font-bold text-green-600">Prediction: Class {{ result.prediction }}</span>
+                                                </div>
+                                                <div v-if="result.probabilities" class="mt-2 flex space-x-2">
+                                                    <div v-for="(prob, classId) in result.probabilities" :key="classId" class="flex-1">
+                                                        <div class="text-xs text-gray-500 mb-1">Class {{ classId }}</div>
+                                                        <div class="w-full bg-gray-200 rounded-full h-2">
+                                                            <div :style="{ width: (prob * 100) + '%', backgroundColor: prob > 0.5 ? '#10b981' : '#9ca3af' }" class="h-2 rounded-full"></div>
+                                                        </div>
+                                                        <div class="text-xs text-right mt-0.5">{{ (prob * 100).toFixed(1) }}%</div>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Models Tab -->
+                    <div v-if="currentTab === 'models'" class="space-y-6">
+                        <div class="flex justify-between items-center">
+                            <h3 class="text-xl font-bold text-gray-800">Available Models</h3>
+                            <button @click="refreshModels" class="text-blue-600 hover:text-blue-800">
+                                <i class="fas fa-sync-alt mr-2"></i>Refresh
+                            </button>
+                        </div>
+
+                        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                            <div v-for="model in models" :key="model.name" class="bg-white rounded-xl shadow-sm p-6 card-hover">
+                                <div class="flex items-start justify-between mb-4">
+                                    <div class="flex items-center space-x-3">
+                                        <div :class="model.source === 'hdfs' ? 'bg-green-100 text-green-600' : 'bg-blue-100 text-blue-600'" class="w-12 h-12 rounded-lg flex items-center justify-center">
+                                            <i :class="model.source === 'hdfs' ? 'fas fa-database' : 'fas fa-hdd'"></i>
+                                        </div>
+                                        <div>
+                                            <h4 class="font-bold text-gray-800">{{ model.name }}</h4>
+                                            <p class="text-sm text-gray-500">{{ model.source.toUpperCase() }} • {{ formatBytes(model.size) }}</p>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div v-if="model.metadata && model.metadata.metrics" class="mb-4 space-y-2">
+                                    <div class="flex justify-between text-sm">
+                                        <span class="text-gray-500">Accuracy:</span>
+                                        <span class="font-semibold text-green-600">{{ (model.metadata.metrics.accuracy * 100).toFixed(1) }}%</span>
+                                    </div>
+                                    <div class="flex justify-between text-sm">
+                                        <span class="text-gray-500">Type:</span>
+                                        <span class="font-semibold text-blue-600">{{ model.metadata.model_type }}</span>
+                                    </div>
+                                </div>
+
+                                <div class="flex space-x-2 mt-4">
+                                    <button @click="testModelInline(model)" class="flex-1 gradient-bg text-white py-2 rounded-lg text-sm font-medium hover:opacity-90">
+                                        <i class="fas fa-flask mr-1"></i>Test
+                                    </button>
+                                    <button v-if="model.source === 'hdfs'" @click="downloadModel(model)" class="flex-1 bg-gray-100 text-gray-700 py-2 rounded-lg text-sm font-medium hover:bg-gray-200">
+                                        <i class="fas fa-download mr-1"></i>Download
+                                    </button>
+                                </div>
+
+                                <!-- Inline Test Results -->
+                                <div v-if="model.testResults" class="mt-4 pt-4 border-t">
+                                    <h5 class="font-semibold text-gray-700 mb-2 text-sm">Test Results</h5>
+                                    <div class="space-y-2">
+                                        <div v-for="result in model.testResults" :key="result.sample_id" class="bg-gray-50 p-2 rounded text-sm">
+                                            <div class="flex justify-between">
+                                                <span class="text-gray-600">Sample {{ result.sample_id }}</span>
+                                                <span class="font-bold text-green-600">Class {{ result.prediction }}</span>
+                                            </div>
+                                            <div v-if="result.probabilities" class="mt-1 flex space-x-1">
+                                                <div v-for="(prob, classId) in result.probabilities" :key="classId" class="flex-1">
+                                                    <div class="w-full bg-gray-200 rounded-full h-1.5">
+                                                        <div :style="{ width: (prob * 100) + '%' }" :class="prob > 0.5 ? 'bg-green-500' : 'bg-gray-400'" class="h-1.5 rounded-full"></div>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div v-if="models.length === 0" class="text-center py-12">
+                            <i class="fas fa-robot text-6xl text-gray-300 mb-4"></i>
+                            <p class="text-gray-500">No models available. Create a pipeline or upload a model.</p>
+                        </div>
+                    </div>
+
+                    <!-- HDFS Browser Tab -->
+                    <div v-if="currentTab === 'hdfs'" class="space-y-6">
+                        <div class="bg-white rounded-xl shadow-sm p-6">
+                            <div class="flex justify-between items-center mb-4">
+                                <h3 class="text-xl font-bold text-gray-800">HDFS File Browser</h3>
+                                <div class="flex items-center space-x-2">
+                                    <button @click="navigateTo('/')" class="text-gray-600 hover:text-gray-800">
+                                        <i class="fas fa-home"></i>
+                                    </button>
+                                    <button @click="refreshHdfs" class="text-blue-600 hover:text-blue-800">
+                                        <i class="fas fa-sync-alt"></i>
+                                    </button>
+                                </div>
+                            </div>
+
+                            <!-- Current Path -->
+                            <div class="flex items-center space-x-2 mb-4 p-3 bg-gray-50 rounded-lg">
+                                <i class="fas fa-folder text-yellow-500"></i>
+                                <span class="text-gray-700 font-mono text-sm">{{ currentHdfsPath }}</span>
+                            </div>
+
+                            <!-- Files Table -->
+                            <div class="overflow-x-auto">
+                                <table class="w-full">
+                                    <thead>
+                                        <tr class="border-b">
+                                            <th class="text-left py-3 px-4 text-gray-600 font-medium">Name</th>
+                                            <th class="text-left py-3 px-4 text-gray-600 font-medium">Type</th>
+                                            <th class="text-left py-3 px-4 text-gray-600 font-medium">Size</th>
+                                            <th class="text-left py-3 px-4 text-gray-600 font-medium">Modified</th>
+                                            <th class="text-left py-3 px-4 text-gray-600 font-medium">Actions</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr v-for="entry in hdfsEntries" :key="entry.path" class="border-b hover:bg-gray-50">
+                                            <td class="py-3 px-4">
+                                                <div class="flex items-center space-x-3">
+                                                    <i :class="entry.type === 'directory' ? 'fas fa-folder text-yellow-500' : 'fas fa-file text-gray-400'"></i>
+                                                    <span class="font-medium text-gray-800">{{ entry.name }}</span>
+                                                </div>
+                                            </td>
+                                            <td class="py-3 px-4">
+                                                <span :class="entry.type === 'directory' ? 'bg-yellow-100 text-yellow-700' : 'bg-gray-100 text-gray-700'" class="px-2 py-1 rounded text-xs font-medium capitalize">{{ entry.type }}</span>
+                                            </td>
+                                            <td class="py-3 px-4 text-gray-600">{{ entry.type === 'directory' ? '-' : formatBytes(entry.size) }}</td>
+                                            <td class="py-3 px-4 text-gray-600 text-sm">{{ new Date(entry.modified).toLocaleString() }}</td>
+                                            <td class="py-3 px-4">
+                                                <div class="flex space-x-2">
+                                                    <button v-if="entry.type === 'directory'" @click="navigateTo(entry.path)" class="text-blue-600 hover:text-blue-800 text-sm">
+                                                        <i class="fas fa-arrow-right"></i> Open
+                                                    </button>
+                                                    <button v-if="entry.type === 'file' && entry.name.endsWith('.joblib')" @click="downloadHdfsFile(entry)" class="text-green-600 hover:text-green-800 text-sm">
+                                                        <i class="fas fa-download"></i> Download
+                                                    </button>
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+
+                            <div v-if="hdfsEntries.length === 0 && !hdfsBrowseError" class="text-center py-8 text-gray-500">
+                                <i class="fas fa-folder-open text-4xl text-gray-300 mb-2"></i>
+                                <p>This folder is empty</p>
+                            </div>
+                            <div v-if="hdfsBrowseError" class="text-center py-8 text-red-500">
+                                <i class="fas fa-exclamation-triangle text-4xl mb-2"></i>
+                                <p>{{ hdfsBrowseError }}</p>
+                            </div>
+                        </div>
+
+                        <!-- HDFS Stats -->
+                        <div class="bg-white rounded-xl shadow-sm p-6">
+                            <h3 class="text-lg font-bold text-gray-800 mb-4">HDFS Statistics</h3>
+                            <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+                                <div class="text-center p-4 bg-blue-50 rounded-lg">
+                                    <p class="text-gray-500 text-sm">Connected</p>
+                                    <p :class="hdfsStatus.connected ? 'text-green-600' : 'text-red-600'" class="text-xl font-bold">
+                                        {{ hdfsStatus.connected ? 'Yes' : 'No' }}
+                                    </p>
+                                </div>
+                                <div class="text-center p-4 bg-green-50 rounded-lg">
+                                    <p class="text-gray-500 text-sm">Total Files</p>
+                                    <p class="text-xl font-bold text-green-600">{{ hdfsStatus.files.length }}</p>
+                                </div>
+                                <div class="text-center p-4 bg-purple-50 rounded-lg">
+                                    <p class="text-gray-500 text-sm">Total Size</p>
+                                    <p class="text-xl font-bold text-purple-600">{{ formatBytes(hdfsStatus.total_size) }}</p>
+                                </div>
+                                <div class="text-center p-4 bg-orange-50 rounded-lg">
+                                    <p class="text-gray-500 text-sm">Namenode</p>
+                                    <p class="text-sm font-bold text-orange-600 truncate">{{ hdfsStatus.namenode }}</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Upload Model Tab -->
+                    <div v-if="currentTab === 'upload'" class="space-y-6">
+                        <div class="bg-white rounded-xl shadow-sm p-6">
+                            <h3 class="text-xl font-bold text-gray-800 mb-6">Upload Model from External Source</h3>
+                            
+                            <form @submit.prevent="uploadExternalModel" class="space-y-4">
+                                <div>
+                                    <label class="block text-gray-700 font-medium mb-2">Source Type</label>
+                                    <select v-model="uploadForm.source_type" class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500">
+                                        <option value="url">Direct URL</option>
+                                        <option value="nexus">Nexus Repository</option>
+                                    </select>
+                                </div>
+                                
+                                <div>
+                                    <label class="block text-gray-700 font-medium mb-2">Source URL</label>
+                                    <input v-model="uploadForm.source_url" type="url" required class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500" placeholder="https://example.com/model.joblib or https://nexus.example.com/repository/models/model.joblib">
+                                </div>
+                                
+                                <div>
+                                    <label class="block text-gray-700 font-medium mb-2">Filename (optional)</label>
+                                    <input v-model="uploadForm.filename" type="text" class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500" placeholder="my_model.joblib">
+                                </div>
+                                
+                                <button type="submit" :disabled="uploading" class="gradient-bg text-white px-8 py-3 rounded-lg font-semibold hover:opacity-90 transition disabled:opacity-50">
+                                    <i class="fas fa-upload mr-2"></i>{{ uploading ? 'Uploading...' : 'Start Upload' }}
+                                </button>
+                            </form>
+                        </div>
+
+                        <!-- Upload Tasks -->
+                        <div v-if="uploadTasks.length > 0" class="bg-white rounded-xl shadow-sm p-6">
+                            <h3 class="text-lg font-bold text-gray-800 mb-4">Upload Tasks</h3>
+                            <div class="space-y-4">
+                                <div v-for="task in uploadTasks" :key="task.id" class="border rounded-lg p-4">
+                                    <div class="flex justify-between items-center mb-2">
+                                        <div>
+                                            <p class="font-semibold text-gray-800">Task {{ task.id }}</p>
+                                            <p class="text-sm text-gray-500">{{ task.message }}</p>
+                                        </div>
+                                        <span :class="{
+                                            'bg-green-100 text-green-700': task.status === 'completed',
+                                            'bg-red-100 text-red-700': task.status === 'failed',
+                                            'bg-blue-100 text-blue-700': ['pending', 'downloading', 'uploading_hdfs', 'validating'].includes(task.status)
+                                        }" class="px-3 py-1 rounded-full text-sm font-medium capitalize">{{ task.status }}</span>
+                                    </div>
+                                    <div class="w-full bg-gray-200 rounded-full h-2">
+                                        <div :style="{ width: task.progress + '%' }" class="gradient-bg h-2 rounded-full transition-all duration-500"></div>
+                                    </div>
+                                    <p class="text-xs text-gray-500 mt-1">{{ task.progress }}% complete</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </main>
+            </div>
+        </div>
+
+        <!-- Create Pipeline Modal -->
+        <div v-if="showCreatePipeline" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+            <div class="bg-white rounded-2xl max-w-md w-full">
+                <div class="p-6 border-b">
+                    <div class="flex justify-between items-center">
+                        <h3 class="text-xl font-bold text-gray-800">Create New Pipeline</h3>
+                        <button @click="showCreatePipeline = false" class="text-gray-500 hover:text-gray-700"><i class="fas fa-times text-xl"></i></button>
+                    </div>
+                </div>
+                <div class="p-6">
+                    <form @submit.prevent="createPipeline">
+                        <div class="mb-4">
+                            <label class="block text-gray-700 font-medium mb-2">Pipeline Name</label>
+                            <input v-model="newPipeline.name" type="text" required class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500" placeholder="My ML Pipeline">
+                        </div>
+                        <div class="mb-6">
+                            <label class="block text-gray-700 font-medium mb-2">Model Type</label>
+                            <select v-model="newPipeline.model_type" class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500">
+                                <option value="random_forest">Random Forest</option>
+                                <option value="gradient_boosting">Gradient Boosting</option>
+                                <option value="logistic_regression">Logistic Regression</option>
+                                <option value="neural_network">Neural Network</option>
+                            </select>
+                        </div>
+                        <div class="flex space-x-3">
+                            <button type="button" @click="showCreatePipeline = false" class="flex-1 bg-gray-100 text-gray-700 py-3 rounded-lg font-medium hover:bg-gray-200">Cancel</button>
+                            <button type="submit" class="flex-1 gradient-bg text-white py-3 rounded-lg font-medium hover:opacity-90">Create Pipeline</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const { createApp } = Vue;
+
+        createApp({
+            data() {
+                return {
+                    isLoggedIn: false,
+                    user: {},
+                    token: null,
+                    loginForm: { username: '', password: '' },
+                    loginError: '',
+                    currentTab: 'dashboard',
+                    pipelines: [],
+                    models: [],
+                    hdfsStatus: { connected: false, files: [], total_size: 0 },
+                    hdfsEntries: [],
+                    currentHdfsPath: '/',
+                    showCreatePipeline: false,
+                    newPipeline: { name: '', model_type: 'random_forest' },
+                    selectedPipeline: null,
+                    testResults: null,
+                    uploadForm: { source_type: 'url', source_url: '', filename: '' },
+                    uploadTasks: [],
+                    uploading: false,
+                    hdfsBrowseError: null,
+                    pollingInterval: null
+                };
+            },
+            computed: {
+                tabTitle() {
+                    const titles = {
+                        dashboard: 'Dashboard',
+                        pipelines: 'ML Pipelines',
+                        models: 'Models',
+                        hdfs: 'HDFS Browser',
+                        upload: 'Upload Model'
+                    };
+                    return titles[this.currentTab];
+                },
+                recentPipelines() {
+                    return [...this.pipelines].sort((a, b) => new Date(b.created_at) - new Date(a.created_at)).slice(0, 5);
+                },
+                hdfsModelsCount() {
+                    return this.hdfsStatus.files.filter(f => f.name.endsWith('.joblib')).length;
+                },
+                hdfsTotalSize() {
+                    return this.hdfsStatus.total_size;
+                },
+                successRate() {
+                    if (this.pipelines.length === 0) return 0;
+                    const completed = this.pipelines.filter(p => p.status === 'completed').length;
+                    return Math.round((completed / this.pipelines.length) * 100);
+                }
+            },
+            methods: {
+                async login() {
+                    try {
+                        const response = await fetch('/api/login', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(this.loginForm)
+                        });
+                        const data = await response.json();
+                        if (response.ok) {
+                            this.token = data.token;
+                            this.user = data;
+                            this.isLoggedIn = true;
+                            this.loginError = '';
+                            this.initializeApp();
+                        } else {
+                            this.loginError = data.error || 'Login failed';
+                        }
+                    } catch (error) {
+                        this.loginError = 'Connection error';
+                    }
+                },
+                logout() {
+                    this.isLoggedIn = false;
+                    this.token = null;
+                    this.user = {};
+                    if (this.pollingInterval) {
+                        clearInterval(this.pollingInterval);
+                    }
+                },
+                getHeaders() {
+                    return { 'Authorization': `Bearer ${this.token}`, 'Content-Type': 'application/json' };
+                },
+                async initializeApp() {
+                    await Promise.all([
+                        this.fetchPipelines(),
+                        this.fetchHdfsStatus(),
+                        this.fetchModels()
+                    ]);
+                    this.startPolling();
+                },
+                startPolling() {
+                    this.pollingInterval = setInterval(() => {
+                        this.fetchPipelines();
+                        this.fetchHdfsStatus();
+                    }, 3000);
+                },
+                async fetchPipelines() {
+                    try {
+                        const response = await fetch('/api/pipelines', { headers: this.getHeaders() });
+                        if (response.ok) {
+                            this.pipelines = await response.json();
+                        }
+                    } catch (error) {
+                        console.error('Error fetching pipelines:', error);
+                    }
+                },
+                async fetchHdfsStatus() {
+                    try {
+                        const response = await fetch('/api/hdfs/status', { headers: this.getHeaders() });
+                        if (response.ok) {
+                            this.hdfsStatus = await response.json();
+                        }
+                    } catch (error) {
+                        console.error('Error fetching HDFS status:', error);
+                    }
+                },
+                async fetchModels() {
+                    try {
+                        const response = await fetch('/api/models', { headers: this.getHeaders() });
+                        if (response.ok) {
+                            this.models = await response.json();
+                        }
+                    } catch (error) {
+                        console.error('Error fetching models:', error);
+                    }
+                },
+                async createPipeline() {
+                    try {
+                        const response = await fetch('/api/pipelines', {
+                            method: 'POST',
+                            headers: this.getHeaders(),
+                            body: JSON.stringify(this.newPipeline)
+                        });
+                        if (response.ok) {
+                            this.showCreatePipeline = false;
+                            this.newPipeline = { name: '', model_type: 'random_forest' };
+                            await this.fetchPipelines();
+                        }
+                    } catch (error) {
+                        console.error('Error creating pipeline:', error);
+                    }
+                },
+                viewPipelineDetails(pipeline) {
+                    this.selectedPipeline = pipeline;
+                    this.testResults = null;
+                },
+                async testModelFromPipeline(pipeline) {
+                    const modelName = pipeline.stages[5]?.logs?.find(log => log.includes('Model saved:'))?.split(': ')[1];
+                    if (!modelName) return;
+                    
+                    try {
+                        const response = await fetch(`/api/models/${modelName}/test`, {
+                            method: 'POST',
+                            headers: this.getHeaders()
+                        });
+                        if (response.ok) {
+                            const data = await response.json();
+                            this.testResults = data.test_results;
+                        }
+                    } catch (error) {
+                        console.error('Error testing model:', error);
+                    }
+                },
+                async testModelInline(model) {
+                    try {
+                        const response = await fetch(`/api/models/${model.name}/test`, {
+                            method: 'POST',
+                            headers: this.getHeaders()
+                        });
+                        if (response.ok) {
+                            const data = await response.json();
+                            model.testResults = data.test_results;
+                        }
+                    } catch (error) {
+                        console.error('Error testing model:', error);
+                    }
+                },
+                async refreshModels() {
+                    await this.fetchModels();
+                },
+                async browseHdfs(path) {
+                    this.hdfsBrowseError = null;
+                    try {
+                        const response = await fetch('/api/hdfs/browse', {
+                            method: 'POST',
+                            headers: this.getHeaders(),
+                            body: JSON.stringify({ path })
+                        });
+                        if (response.ok) {
+                            const data = await response.json();
+                            if (data.error) {
+                                this.hdfsBrowseError = data.error;
+                                this.hdfsEntries = [];
+                            } else {
+                                this.hdfsEntries = data.entries;
+                                this.currentHdfsPath = path;
+                            }
+                        }
+                    } catch (error) {
+                        this.hdfsBrowseError = 'Failed to browse HDFS';
+                    }
+                },
+                navigateTo(path) {
+                    this.browseHdfs(path);
+                },
+                async refreshHdfs() {
+                    await this.browseHdfs(this.currentHdfsPath);
+                },
+                async downloadHdfsFile(entry) {
+                    try {
+                        const response = await fetch('/api/hdfs/download', {
+                            method: 'POST',
+                            headers: this.getHeaders(),
+                            body: JSON.stringify({ path: entry.path })
+                        });
+                        if (response.ok) {
+                            const data = await response.json();
+                            alert(`Downloaded ${entry.name} to local storage`);
+                            await this.fetchModels();
+                        }
+                    } catch (error) {
+                        console.error('Error downloading file:', error);
+                    }
+                },
+                async downloadModel(model) {
+                    // For HDFS models, we need to download them first
+                    if (model.source === 'hdfs') {
+                        try {
+                            const response = await fetch('/api/hdfs/download', {
+                                method: 'POST',
+                                headers: this.getHeaders(),
+                                body: JSON.stringify({ path: model.path })
+                            });
+                            if (response.ok) {
+                                alert(`Downloaded ${model.name} to local storage`);
+                                await this.fetchModels();
+                            }
+                        } catch (error) {
+                            console.error('Error downloading model:', error);
+                        }
+                    }
+                },
+                async uploadExternalModel() {
+                    this.uploading = true;
+                    try {
+                        const response = await fetch('/api/upload/model', {
+                            method: 'POST',
+                            headers: this.getHeaders(),
+                            body: JSON.stringify(this.uploadForm)
+                        });
+                        if (response.ok) {
+                            const task = await response.json();
+                            this.uploadTasks.unshift(task);
+                            this.pollUploadTask(task.id);
+                            this.uploadForm = { source_type: 'url', source_url: '', filename: '' };
+                        }
+                    } catch (error) {
+                        console.error('Error uploading model:', error);
+                    } finally {
+                        this.uploading = false;
+                    }
+                },
+                async pollUploadTask(taskId) {
+                    const poll = async () => {
+                        try {
+                            const response = await fetch(`/api/upload/tasks/${taskId}`, { headers: this.getHeaders() });
+                            if (response.ok) {
+                                const task = await response.json();
+                                const index = this.uploadTasks.findIndex(t => t.id === taskId);
+                                if (index !== -1) {
+                                    this.uploadTasks[index] = task;
+                                }
+                                if (['completed', 'failed'].includes(task.status)) {
+                                    await this.fetchModels();
+                                } else {
+                                    setTimeout(poll, 2000);
+                                }
+                            }
+                        } catch (error) {
+                            console.error('Error polling task:', error);
+                        }
+                    };
+                    poll();
+                },
+                formatBytes(bytes) {
+                    if (bytes === 0) return '0 Bytes';
+                    const k = 1024;
+                    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+                    const i = Math.floor(Math.log(bytes) / Math.log(k));
+                    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+                }
+            },
+            beforeUnmount() {
+                if (this.pollingInterval) {
+                    clearInterval(this.pollingInterval);
+                }
+            }
+        }).mount('#app');
+    </script>
+</body>
+</html>

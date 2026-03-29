@@ -1,0 +1,87 @@
+version: '3.8'
+
+services:
+  namenode:
+    build:
+      context: ./hdfs
+      dockerfile: Dockerfile.namenode
+    container_name: hdfs-namenode
+    hostname: namenode
+    environment:
+      - CLUSTER_NAME=mlops-cluster
+      - CORE_CONF_fs_defaultFS=hdfs://namenode:9000
+      - HDFS_CONF_dfs_namenode_name_dir=file:///hadoop/dfs/name
+      - HDFS_CONF_dfs_replication=1
+    ports:
+      - "9870:9870"
+      - "9000:9000"
+    volumes:
+      - hdfs_namenode:/hadoop/dfs/name
+    networks:
+      - mlops-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9870/jmx"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  datanode:
+    build:
+      context: ./hdfs
+      dockerfile: Dockerfile.datanode
+    container_name: hdfs-datanode
+    hostname: datanode
+    environment:
+      - CLUSTER_NAME=mlops-cluster
+      - CORE_CONF_fs_defaultFS=hdfs://namenode:9000
+      - HDFS_CONF_dfs_datanode_data_dir=file:///hadoop/dfs/data
+      - HDFS_CONF_dfs_replication=1
+    depends_on:
+      namenode:
+        condition: service_healthy
+    ports:
+      - "9864:9864"
+    volumes:
+      - hdfs_datanode:/hadoop/dfs/data
+    networks:
+      - mlops-network
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: mlops-backend
+    environment:
+      - HDFS_NAMENODE=http://namenode:9870
+    ports:
+      - "5000:5000"
+    volumes:
+      - /workspace/models:/workspace/models
+      - /workspace/hdfs_data:/workspace/hdfs_data
+    depends_on:
+      namenode:
+        condition: service_healthy
+    networks:
+      - mlops-network
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: mlops-frontend
+    ports:
+      - "8080:80"
+    depends_on:
+      - backend
+    networks:
+      - mlops-network
+    restart: unless-stopped
+
+volumes:
+  hdfs_namenode:
+  hdfs_datanode:
+
+networks:
+  mlops-network:
+    driver: bridge
