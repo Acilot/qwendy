@@ -1,194 +1,168 @@
-# MLOps Platform - ML Pipeline with Hadoop Integration
+# MLOps Platform
 
-A complete MLOps solution for training, deploying, and serving machine learning models with Hadoop integration.
+Modern MLOps platform with ML pipeline management, model training, HDFS storage integration, and a beautiful web interface.
 
-## 🚀 Features
+## Features
 
-- **ML Pipeline**: Automated model training with scikit-learn
-- **Inference Service**: REST API for model predictions
-- **Web Interface**: User-friendly dashboard for model management
-- **Hadoop Integration**: HDFS storage for model versioning
-- **Docker Support**: Full containerization with docker-compose
+- 🔐 **Authentication**: Secure login system (admin/999999)
+- 🚀 **Pipeline Management**: Create and run ML pipelines with different algorithms
+- 📊 **Real-time Monitoring**: Track pipeline status and progress
+- 🤖 **Multiple Models**: Random Forest, Gradient Boosting, Logistic Regression, Neural Networks
+- 💾 **HDFS Storage**: Simulated Hadoop storage for model artifacts
+- 🎯 **Model Inference**: Test models directly from the UI
+- 📈 **Metrics Dashboard**: Accuracy, Precision, Recall, F1-Score visualization
+- 🐳 **Docker Ready**: Full containerization support
 
-## 📁 Project Structure
+## Quick Start
 
-```
-/workspace
-├── ml_pipeline/           # Model training pipeline
-│   ├── pipeline.py        # Main training code
-│   ├── requirements.txt
-│   └── Dockerfile
-├── inference_service/     # Prediction API
-│   ├── app.py            # Flask API server
-│   ├── requirements.txt
-│   └── Dockerfile
-├── web_interface/         # Web dashboard
-│   ├── app.py            # Main application
-│   ├── index.html        # Frontend UI
-│   ├── requirements.txt
-│   └── Dockerfile
-├── hadoop_integration/    # HDFS integration
-│   ├── hdfs_client.py    # Hadoop client
-│   ├── requirements.txt
-│   └── Dockerfile
-├── docker-compose.yml     # Orchestration
-└── README.md             # This file
-```
-
-## 🛠️ Quick Start
-
-### Option 1: Run with Docker Compose (Recommended)
+### Option 1: Docker (Recommended)
 
 ```bash
 # Build and start all services
 docker-compose up --build
 
-# Access the web interface
-open http://localhost:8080
+# Or with docker compose v2
+docker compose up --build
 ```
 
-### Option 2: Run Locally (without Docker)
+Access the platform at:
+- **Frontend**: http://localhost:8080
+- **Backend API**: http://localhost:5000
+
+### Option 2: Python (No Docker)
 
 ```bash
 # Install dependencies
-pip install -r ml_pipeline/requirements.txt
-pip install -r inference_service/requirements.txt
-pip install -r web_interface/requirements.txt
+pip install Flask flask-cors PyJWT numpy scikit-learn joblib
 
-# Train a model
-cd ml_pipeline && python pipeline.py
+# Start the backend
+cd backend && python app.py
 
-# Start the web interface
-cd ../web_interface && python app.py
-
-# Access http://localhost:8080
+# Open frontend/index.html in a browser or serve with nginx
 ```
 
-## 📊 API Endpoints
-
-### Main Platform (Port 8080)
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/` | GET | Web interface |
-| `/api/health` | GET | Health check |
-| `/api/predict` | POST | Make prediction |
-| `/api/models` | GET | List all models |
-| `/api/model/info` | GET | Current model info |
-| `/api/model/load/<version>` | POST | Load specific model |
-| `/api/train` | POST | Train new model |
-
-### Inference Service (Port 5000)
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/health` | GET | Health check |
-| `/predict` | POST | Make prediction |
-| `/models` | GET | List all models |
-| `/model/info` | GET | Current model info |
-
-## 🔮 Making Predictions
-
-### Via Web Interface
-1. Open http://localhost:8080
-2. Enter 10 feature values
-3. Click "Get Prediction"
-
-### Via API
+### Option 3: Start Script
 
 ```bash
-curl -X POST http://localhost:8080/api/predict \
-  -H "Content-Type: application/json" \
-  -d '{
-    "features": [0.5, -0.3, 0.1, 0.8, -0.2, 0.4, -0.6, 0.9, -0.1, 0.3]
-  }'
+./start.sh
 ```
 
-### Response Example
+## Login Credentials
 
-```json
-{
-  "success": true,
-  "result": {
-    "prediction": 1,
-    "probabilities": {
-      "class_0": 0.31,
-      "class_1": 0.69
-    }
-  }
-}
-```
+- **Username**: admin
+- **Password**: 999999
 
-## 🎯 Training New Models
-
-### Via Web Interface
-Send POST request to `/api/train`:
-
-```bash
-curl -X POST http://localhost:8080/api/train \
-  -H "Content-Type: application/json" \
-  -d '{"model_type": "random_forest"}'
-```
-
-Supported model types:
-- `random_forest` (default)
-- `logistic_regression`
-
-## 🐘 Hadoop Integration
-
-The platform includes simulated HDFS integration for model storage:
-
-```python
-from hadoop_integration.hdfs_client import HadoopIntegration
-
-hdfs = HadoopIntegration()
-
-# Upload model to HDFS
-hdfs.upload_model(
-    local_model_path="/app/models/model_20240101_120000.pkl",
-    local_info_path="/app/models/info_20240101_120000.json"
-)
-
-# Download model from HDFS
-hdfs.download_model(version="20240101_120000")
-
-# List all models in HDFS
-models = hdfs.list_models()
-```
-
-## 🏗️ Architecture
+## Architecture
 
 ```
-┌─────────────────┐     ┌──────────────────┐
-│  Web Interface  │────▶│  Inference API   │
-│   (Port 8080)   │     │   (Port 5000)    │
-└─────────────────┘     └────────┬─────────┘
+┌─────────────────┐     ┌─────────────────┐
+│   Frontend      │────▶│   Backend API   │
+│   (Vue.js +     │     │   (Flask)       │
+│    TailwindCSS) │◀────│                 │
+└─────────────────┘     └────────┬────────┘
                                  │
-                          ┌──────▼──────┐
-                          │   Models    │
-                          │  Storage    │
-                          └──────┬──────┘
-                                 │
-                          ┌──────▼──────┐
-                          │   Hadoop    │
-                          │    HDFS     │
-                          └─────────────┘
+                    ┌────────────┼────────────┐
+                    ▼            ▼            ▼
+              ┌──────────┐ ┌──────────┐ ┌──────────┐
+              │ Models   │ │  HDFS    │ │Pipelines │
+              │ Storage  │ │ Storage  │ │ Config   │
+              └──────────┘ └──────────┘ └──────────┘
 ```
 
-## 🧪 Testing
+## API Endpoints
 
-```bash
-# Test ML Pipeline
-cd ml_pipeline && python pipeline.py
+### Authentication
+- `POST /api/login` - User login
 
-# Test Hadoop Integration
-cd hadoop_integration && python hdfs_client.py
+### Pipelines
+- `GET /api/pipelines` - List all pipelines
+- `POST /api/pipelines` - Create new pipeline
+- `POST /api/pipelines/<id>/run` - Run pipeline
+- `GET /api/pipelines/<id>` - Get pipeline details
+- `DELETE /api/pipelines/<id>` - Delete pipeline (admin)
 
-# Test Inference Service
-cd inference_service && python app.py &
-curl http://localhost:5000/health
+### Models
+- `GET /api/models` - List trained models
+- `POST /api/models/<id>/predict` - Make prediction
+
+### HDFS
+- `GET /api/hdfs/status` - Get HDFS status
+- `DELETE /api/hdfs/files/<filename>` - Delete file (admin)
+
+### Stats
+- `GET /api/stats` - Dashboard statistics
+
+## Project Structure
+
+```
+/workspace
+├── backend/
+│   ├── app.py           # Flask API server
+│   ├── requirements.txt # Python dependencies
+│   └── Dockerfile
+├── frontend/
+│   ├── index.html       # Vue.js SPA
+│   ├── nginx.conf       # Nginx configuration
+│   └── Dockerfile
+├── models/              # Trained model files
+├── hdfs_storage/        # HDFS simulated storage
+├── pipelines/           # Pipeline configurations
+├── docker-compose.yml   # Docker orchestration
+└── start.sh            # Startup script
 ```
 
-## 📝 License
+## Usage Guide
 
-MIT License
+### 1. Create a Pipeline
+
+1. Login with admin/999999
+2. Go to "Pipelines" tab
+3. Click "Create Pipeline"
+4. Enter name, select model type, configure parameters
+5. Click "Create"
+
+### 2. Run Training
+
+1. Find your pipeline in the list
+2. Click "Run" button
+3. Watch real-time progress
+4. View metrics when completed
+
+### 3. Test Model
+
+1. Go to "Models" tab
+2. Click "Test Prediction" on any model
+3. Enter 20 feature values (comma-separated)
+4. Click "Predict" to see results
+
+### 4. Manage HDFS Storage
+
+1. Go to "HDFS Storage" tab
+2. View all stored model files
+3. See file sizes, checksums, metadata
+4. Admin can delete files
+
+## Supported Model Types
+
+- **Random Forest**: Ensemble of decision trees
+- **Gradient Boosting**: Sequential tree building
+- **Logistic Regression**: Linear classification
+- **Neural Network**: Multi-layer perceptron
+
+## Technology Stack
+
+**Backend:**
+- Python 3.10
+- Flask (Web Framework)
+- Scikit-learn (ML Library)
+- PyJWT (Authentication)
+- Joblib (Model Serialization)
+
+**Frontend:**
+- Vue.js 3
+- TailwindCSS
+- Font Awesome Icons
+
+**Infrastructure:**
+- Docker & Docker Compose
+- Nginx (Reverse Proxy)

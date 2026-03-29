@@ -1,51 +1,54 @@
 #!/bin/bash
 
-# MLOps Platform - Quick Start Script
-# This script helps you get started with the MLOps platform
+# MLOps Platform - Start Script
+# This script starts the MLOps platform with backend and frontend services
 
-set -e
+echo "🚀 Starting MLOps Platform..."
 
-echo "🚀 MLOps Platform - Quick Start"
-echo "================================"
-echo ""
+# Create necessary directories
+mkdir -p /workspace/models /workspace/hdfs_storage /workspace/pipelines
 
 # Check if Docker is available
-if command -v docker &> /dev/null && command -v docker-compose &> /dev/null; then
-    echo "✅ Docker and Docker Compose found!"
-    echo ""
-    echo "Starting all services with Docker Compose..."
-    docker-compose up --build
+if command -v docker &> /dev/null; then
+    echo "🐳 Using Docker deployment..."
     
-elif command -v docker &> /dev/null && command -v docker compose &> /dev/null; then
-    echo "✅ Docker and Docker Compose (v2) found!"
-    echo ""
-    echo "Starting all services with Docker Compose..."
-    docker compose up --build
+    if command -v docker-compose &> /dev/null; then
+        docker-compose up --build -d
+    elif docker compose version &> /dev/null; then
+        docker compose up --build -d
+    else
+        echo "❌ Neither docker-compose nor docker compose found"
+        exit 1
+    fi
     
+    echo "✅ Services started!"
+    echo "📊 Frontend: http://localhost:8080"
+    echo "🔧 Backend API: http://localhost:5000"
+    echo "🔑 Login: admin / 999999"
 else
-    echo "⚠️  Docker not found. Running in local mode..."
-    echo ""
+    echo "🐍 Using Python deployment (no Docker)..."
     
     # Install dependencies
-    echo "📦 Installing Python dependencies..."
-    pip install -q scikit-learn numpy joblib flask requests
+    echo "Installing Python dependencies..."
+    pip install -q Flask flask-cors PyJWT numpy scikit-learn joblib
     
-    # Create models directory
-    mkdir -p models
+    # Start backend in background
+    echo "Starting backend server..."
+    cd /workspace/backend
+    python app.py &
+    BACKEND_PID=$!
     
-    # Train initial model
-    echo "🤖 Training initial model..."
-    cd ml_pipeline && python pipeline.py
-    cd ..
+    # Wait for backend to start
+    sleep 3
     
-    # Copy models to web_interface
-    cp -r ml_pipeline/models/* web_interface/models/ 2>/dev/null || true
-    
+    echo "✅ Backend started on http://localhost:5000"
+    echo "📁 To access the frontend, serve /workspace/frontend/index.html with a web server"
+    echo "   or open it directly in a browser"
     echo ""
-    echo "✅ Setup complete!"
+    echo "🔑 Login credentials: admin / 999999"
     echo ""
-    echo "To start the web interface, run:"
-    echo "  cd web_interface && python app.py"
-    echo ""
-    echo "Then open http://localhost:8080 in your browser"
+    echo "Press Ctrl+C to stop the server"
+    
+    # Keep running
+    wait $BACKEND_PID
 fi
