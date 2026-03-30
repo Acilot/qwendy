@@ -1,34 +1,98 @@
 version: '3.8'
 
 services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: mlops-postgres
+    environment:
+      POSTGRES_DB: mlops
+      POSTGRES_USER: mlops
+      POSTGRES_PASSWORD: mlops_secure_password_2024
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mlops -d mlops"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - mlops-network
+
+  # HDFS (Optional - for production)
+  # Uncomment for real HDFS integration
+  # hdfs-namenode:
+  #   image: sequenceiq/hadoop-docker:2.7.1
+  #   container_name: mlops-hdfs
+  #   command: /etc/bootstrap.sh -bash
+  #   volumes:
+  #     - hdfs_data:/hadoop/dfs/data
+  #   ports:
+  #     - "9000:9000"
+  #     - "50070:50070"
+  #   environment:
+  #     - HDFS_SITE=/etc/hadoop/hdfs-site.xml
+  #     - CORE_SITE=/etc/hadoop/core-site.xml
+  #   networks:
+  #     - mlops-network
+
+  # Backend API
   backend:
-    build: ./backend
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
     container_name: mlops-backend
+    environment:
+      DATABASE_URL: postgresql://mlops:mlops_secure_password_2024@postgres:5432/mlops
+      SECRET_KEY: ${SECRET_KEY:-mlops-secret-key-change-in-production}
+      MODELS_DIR: /workspace/models
+      DATA_DIR: /workspace/data
+      # HDFS_URL: hdfs://hdfs-namenode:9000
+      # HDFS_USER: mlops
     volumes:
       - ./models:/workspace/models
+      - ./data:/workspace/data
       - ./hdfs_storage:/workspace/hdfs_storage
-      - ./pipelines:/workspace/pipelines
     ports:
       - "5000:5000"
-    environment:
-      - FLASK_ENV=production
-    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5000/api/stats"]
       interval: 30s
       timeout: 10s
       retries: 3
+    networks:
+      - mlops-network
+    # GPU support (uncomment for NVIDIA GPU)
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
 
+  # Frontend
   frontend:
-    build: ./frontend
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
     container_name: mlops-frontend
     ports:
       - "8080:80"
     depends_on:
       - backend
-    restart: unless-stopped
+    networks:
+      - mlops-network
+
+networks:
+  mlops-network:
+    driver: bridge
 
 volumes:
-  models_data:
-  hdfs_data:
-  pipelines_data:
+  postgres_data:
+  # hdfs_data:
