@@ -35,12 +35,13 @@ from sqlalchemy import create_engine, Column, String, Text, DateTime, Float, Int
 from sqlalchemy.orm import sessionmaker, declarative_base, relationship
 from sqlalchemy.pool import StaticPool
 
-# HDFS
+# HDFS (optional - for external cluster integration)
+HDFS_AVAILABLE = False
 try:
     import pyarrow.fs as hdfs_fs
-    HDFS_AVAILABLE = True
+    HDFS_AVAILABLE = os.environ.get('HDFS_URL', '') != ''
 except ImportError:
-    HDFS_AVAILABLE = False
+    pass
 
 # GPU detection
 try:
