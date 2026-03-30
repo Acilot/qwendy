@@ -21,22 +21,27 @@ services:
     networks:
       - mlops-network
 
-  # HDFS (Optional - for production)
-  # Uncomment for real HDFS integration
-  # hdfs-namenode:
-  #   image: sequenceiq/hadoop-docker:2.7.1
-  #   container_name: mlops-hdfs
-  #   command: /etc/bootstrap.sh -bash
-  #   volumes:
-  #     - hdfs_data:/hadoop/dfs/data
-  #   ports:
-  #     - "9000:9000"
-  #     - "50070:50070"
-  #   environment:
-  #     - HDFS_SITE=/etc/hadoop/hdfs-site.xml
-  #     - CORE_SITE=/etc/hadoop/core-site.xml
-  #   networks:
-  #     - mlops-network
+  # HDFS NameNode (Real Hadoop HDFS)
+  hdfs-namenode:
+    image: sequenceiq/hadoop-docker:2.7.1
+    container_name: mlops-hdfs
+    command: /etc/bootstrap.sh -bash
+    volumes:
+      - hdfs_data:/hadoop/dfs/data
+      - hdfs_logs:/hadoop/logs
+    ports:
+      - "9000:9000"
+      - "50070:50070"
+    environment:
+      - HDFS_SITE=/etc/hadoop/hdfs-site.xml
+      - CORE_SITE=/etc/hadoop/core-site.xml
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:50070"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    networks:
+      - mlops-network
 
   # Backend API
   backend:
@@ -49,8 +54,8 @@ services:
       SECRET_KEY: ${SECRET_KEY:-mlops-secret-key-change-in-production}
       MODELS_DIR: /workspace/models
       DATA_DIR: /workspace/data
-      # HDFS_URL: hdfs://hdfs-namenode:9000
-      # HDFS_USER: mlops
+      HDFS_URL: hdfs://hdfs-namenode:9000
+      HDFS_USER: hdfs
     volumes:
       - ./models:/workspace/models
       - ./data:/workspace/data
@@ -59,6 +64,8 @@ services:
       - "5000:5000"
     depends_on:
       postgres:
+        condition: service_healthy
+      hdfs-namenode:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5000/api/stats"]
@@ -95,4 +102,5 @@ networks:
 
 volumes:
   postgres_data:
-  # hdfs_data:
+  hdfs_data:
+  hdfs_logs:
