@@ -772,6 +772,7 @@
                     try {
                         const resp = await fetch('/api/setup', {
                             method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({ username: this.setupUsername, password: this.setupPassword })
                         });
                         const data = await resp.json();
