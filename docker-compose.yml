@@ -21,6 +21,29 @@ services:
     networks:
       - mlops-network
 
+  # HDFS NameNode + DataNode (working image)
+  hdfs:
+    image: apache/hadoop:3.3.6
+    container_name: mlops-hdfs
+    hostname: hdfs
+    environment:
+      - CLUSTER_NAME=mlops
+      - HDFS_REPLICATION=1
+    volumes:
+      - hdfs_namenode:/hadoop/dfs/name
+      - hdfs_datadatanode:/hadoop/dfs/data
+      - ./hdfs_storage:/hadoop/dfs/data/import
+    ports:
+      - "9000:9000"
+      - "9870:9870"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9870"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    networks:
+      - mlops-network
+
   # Backend API
   backend:
     build:
@@ -32,10 +55,8 @@ services:
       SECRET_KEY: ${SECRET_KEY:-mlops-secret-key-change-in-production}
       MODELS_DIR: /workspace/models
       DATA_DIR: /workspace/data
-      # HDFS disabled by default - use local storage
-      # For real HDFS: set HDFS_URL to your cluster address
-      HDFS_URL: ""
-      HDFS_USER: mlops
+      HDFS_URL: hdfs://hdfs:9000
+      HDFS_USER: root
     volumes:
       - ./models:/workspace/models
       - ./data:/workspace/data
@@ -45,6 +66,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      hdfs:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5000/api/stats"]
       interval: 30s
@@ -52,14 +75,6 @@ services:
       retries: 3
     networks:
       - mlops-network
-    # GPU support (uncomment for NVIDIA GPU)
-    # deploy:
-    #   resources:
-    #     reservations:
-    #       devices:
-    #         - driver: nvidia
-    #           count: all
-    #           capabilities: [gpu]
 
   # Frontend
   frontend:
@@ -80,3 +95,5 @@ networks:
 
 volumes:
   postgres_data:
+  hdfs_namenode:
+  hdfs_datadatanode:

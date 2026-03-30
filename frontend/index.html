@@ -7,7 +7,6 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         .gradient-bg { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); }
         .card-hover:hover { transform: translateY(-2px); box-shadow: 0 10px 25px rgba(0,0,0,0.1); }
@@ -95,6 +94,9 @@
                     <div class="flex justify-between items-center">
                         <h1 class="text-2xl font-bold"><i class="fas fa-brain mr-2"></i>MLOps Platform</h1>
                         <div class="flex items-center space-x-4">
+                            <a v-if="hdfsStatus.status === 'connected'" :href="hdfsStatus.web_ui" target="_blank" class="text-sm bg-white bg-opacity-20 px-3 py-1 rounded hover:bg-opacity-30">
+                                <i class="fas fa-folder-open mr-1"></i>HDFS
+                            </a>
                             <span class="text-sm"><i class="fas fa-server mr-2"></i>GPU: {{ stats.gpu_available ? 'Yes' : 'No' }}</span>
                             <span class="text-sm"><i class="fas fa-user mr-2"></i>{{ currentUser }}</span>
                             <button @click="logout" class="bg-white bg-opacity-20 px-4 py-2 rounded hover:bg-opacity-30 transition">Logout</button>
@@ -152,10 +154,124 @@
                             <button @click="activeTab = 'data'" :class="['px-4 py-3 font-medium whitespace-nowrap', activeTab === 'data' ? 'border-b-2 border-purple-500 text-purple-600' : 'text-gray-500 hover:text-gray-700']">
                                 <i class="fas fa-database mr-2"></i>Data
                             </button>
+                            <button @click="activeTab = 'hdfs'" :class="['px-4 py-3 font-medium whitespace-nowrap', activeTab === 'hdfs' ? 'border-b-2 border-purple-500 text-purple-600' : 'text-gray-500 hover:text-gray-700']">
+                                <i class="fas fa-folder-open mr-2"></i>HDFS Storage
+                            </button>
                             <button @click="activeTab = 'logs'" :class="['px-4 py-3 font-medium whitespace-nowrap', activeTab === 'logs' ? 'border-b-2 border-purple-500 text-purple-600' : 'text-gray-500 hover:text-gray-700']">
                                 <i class="fas fa-list mr-2"></i>Activity Logs
                             </button>
                         </nav>
+                    </div>
+
+                    <!-- Data Tab -->
+                    <div v-if="activeTab === 'data'" class="p-6">
+                        <div class="flex justify-between items-center mb-6">
+                            <h2 class="text-xl font-bold">Uploaded Data</h2>
+                            <label class="gradient-bg text-white px-4 py-2 rounded-lg cursor-pointer hover:opacity-90">
+                                <i class="fas fa-upload mr-2"></i>Upload CSV/JSON
+                                <input type="file" @change="uploadData" accept=".csv,.json,.parquet" class="hidden">
+                            </label>
+                        </div>
+                        
+                        <!-- Upload Progress -->
+                        <div v-if="uploading" class="mb-4 bg-blue-50 border border-blue-200 rounded-lg p-4">
+                            <div class="flex items-center">
+                                <i class="fas fa-spinner fa-spin text-blue-600 mr-2"></i>
+                                <span>Uploading and analyzing data...</span>
+                            </div>
+                        </div>
+
+                        <!-- Data List -->
+                        <div class="space-y-4">
+                            <div v-for="data in uploadedData" :key="data.data_id" class="border rounded-lg p-4">
+                                <div class="flex justify-between items-start">
+                                    <div>
+                                        <h3 class="font-bold">{{ data.filename }}</h3>
+                                        <p class="text-sm text-gray-500">Format: {{ data.format }} | Rows: {{ data.schema?.row_count || 'N/A' }} | Columns: {{ data.schema?.column_count || data.schema?.columns?.length || 'N/A' }}</p>
+                                    </div>
+                                    <button @click="viewDataSchema(data.data_id)" class="bg-blue-500 text-white px-3 py-1 rounded text-sm hover:bg-blue-600">
+                                        <i class="fas fa-table mr-1"></i>View Schema
+                                    </button>
+                                </div>
+                                <!-- Expected Data Structure Info -->
+                                <div class="mt-3 bg-gray-50 rounded p-3">
+                                    <p class="text-xs text-gray-600 mb-2"><i class="fas fa-info-circle mr-1"></i>Expected format for training:</p>
+                                    <code class="text-xs bg-gray-800 text-green-400 p-2 rounded block overflow-x-auto">
+                                        {{ data.schema?.columns?.slice(0, 5).map(c => c.name).join(', ') }}, [target_column]
+                                    </code>
+                                    <p class="text-xs text-gray-500 mt-1">Each row should contain feature values followed by the target variable for prediction.</p>
+                                </div>
+                            </div>
+                            <div v-if="uploadedData.length === 0" class="text-center py-8 text-gray-500">
+                                <i class="fas fa-database text-4xl mb-2"></i>
+                                <p>No data uploaded yet. Upload a CSV or JSON file to get started.</p>
+                                <div class="mt-4 text-sm text-gray-400">
+                                    <p><strong>Supported formats:</strong> CSV, JSON, Parquet</p>
+                                    <p><strong>Structure:</strong> Tabular data with features + target column</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- HDFS Tab -->
+                    <div v-if="activeTab === 'hdfs'" class="p-6">
+                        <div class="flex justify-between items-center mb-6">
+                            <h2 class="text-xl font-bold">HDFS Storage</h2>
+                            <button @click="loadHdfsFiles" class="bg-gray-500 text-white px-4 py-2 rounded-lg hover:bg-gray-600">
+                                <i class="fas fa-sync mr-2"></i>Refresh
+                            </button>
+                        </div>
+                        
+                        <!-- HDFS Status -->
+                        <div v-if="hdfsStatus.status === 'connected'" class="mb-6 bg-green-50 border border-green-200 rounded-lg p-4">
+                            <div class="flex items-center justify-between">
+                                <div>
+                                    <p class="font-bold text-green-800"><i class="fas fa-check-circle mr-2"></i>HDFS Connected</p>
+                                    <p class="text-sm text-green-600">URL: {{ hdfsStatus.url }} | Web UI: <a :href="hdfsStatus.web_ui" target="_blank" class="underline">{{ hdfsStatus.web_ui }}</a></p>
+                                </div>
+                                <a :href="hdfsStatus.web_ui" target="_blank" class="gradient-bg text-white px-4 py-2 rounded-lg hover:opacity-90">
+                                    <i class="fas fa-external-link-alt mr-2"></i>Open Web UI
+                                </a>
+                            </div>
+                        </div>
+                        <div v-else class="mb-6 bg-yellow-50 border border-yellow-200 rounded-lg p-4">
+                            <p class="text-yellow-800"><i class="fas fa-exclamation-triangle mr-2"></i>{{ hdfsStatus.message || 'HDFS not configured' }}</p>
+                        </div>
+
+                        <!-- Models in HDFS -->
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            <div class="border rounded-lg p-4">
+                                <h3 class="font-bold mb-3"><i class="fas fa-robot text-purple-600 mr-2"></i>Models</h3>
+                                <div class="space-y-2">
+                                    <div v-for="file in hdfsFiles.models" :key="file.path" class="flex justify-between items-center bg-gray-50 p-2 rounded">
+                                        <div>
+                                            <p class="font-mono text-sm">{{ file.name }}</p>
+                                            <p class="text-xs text-gray-500">{{ (file.size / 1024).toFixed(2) }} KB</p>
+                                        </div>
+                                        <a :href="hdfsStatus.web_ui + '/explorer.html#/mlops/models/' + file.name" target="_blank" class="text-blue-600 hover:underline text-sm">
+                                            <i class="fas fa-eye mr-1"></i>View
+                                        </a>
+                                    </div>
+                                    <div v-if="hdfsFiles.models.length === 0" class="text-gray-500 text-sm text-center py-4">No models in HDFS</div>
+                                </div>
+                            </div>
+                            
+                            <div class="border rounded-lg p-4">
+                                <h3 class="font-bold mb-3"><i class="fas fa-database text-blue-600 mr-2"></i>Datasets</h3>
+                                <div class="space-y-2">
+                                    <div v-for="file in hdfsFiles.data" :key="file.path" class="flex justify-between items-center bg-gray-50 p-2 rounded">
+                                        <div>
+                                            <p class="font-mono text-sm">{{ file.name }}</p>
+                                            <p class="text-xs text-gray-500">{{ (file.size / 1024).toFixed(2) }} KB</p>
+                                        </div>
+                                        <a :href="hdfsStatus.web_ui + '/explorer.html#/mlops/data/' + file.name" target="_blank" class="text-blue-600 hover:underline text-sm">
+                                            <i class="fas fa-eye mr-1"></i>View
+                                        </a>
+                                    </div>
+                                    <div v-if="hdfsFiles.data.length === 0" class="text-gray-500 text-sm text-center py-4">No data in HDFS</div>
+                                </div>
+                            </div>
+                        </div>
                     </div>
 
                     <!-- Pipelines Tab -->
@@ -196,23 +312,54 @@
                                         </div>
                                         <div>
                                             <label class="block text-gray-700 mb-2">Model Type</label>
-                                            <select v-model="newPipeline.model_type" class="w-full px-3 py-2 border rounded-lg">
-                                                <option value="random_forest">Random Forest</option>
-                                                <option value="gradient_boosting">Gradient Boosting</option>
-                                                <option value="logistic_regression">Logistic Regression</option>
-                                                <option value="mlp">Neural Network (MLP)</option>
-                                                <option value="svc">Support Vector Machine</option>
-                                                <option value="knn">K-Nearest Neighbors</option>
-                                                <option value="random_forest_regressor">Random Forest (Regression)</option>
-                                                <option value="linear_regression">Linear Regression</option>
+                                            <select v-model="newPipeline.model_type" class="w-full px-3 py-2 border rounded-lg" @change="onModelTypeChange">
+                                                <option value="">Select a model...</option>
+                                                <optgroup label="Classification">
+                                                    <option value="random_forest">Random Forest</option>
+                                                    <option value="gradient_boosting">Gradient Boosting</option>
+                                                    <option value="logistic_regression">Logistic Regression</option>
+                                                    <option value="svc">Support Vector Machine</option>
+                                                    <option value="knn">K-Nearest Neighbors</option>
+                                                    <option value="naive_bayes">Naive Bayes</option>
+                                                </optgroup>
+                                                <optgroup label="Regression">
+                                                    <option value="random_forest_regressor">Random Forest Regressor</option>
+                                                    <option value="gradient_boosting_regressor">Gradient Boosting Regressor</option>
+                                                    <option value="linear_regression">Linear Regression</option>
+                                                    <option value="ridge">Ridge Regression</option>
+                                                    <option value="lasso">Lasso Regression</option>
+                                                </optgroup>
+                                                <optgroup label="Neural Networks">
+                                                    <option value="mlp">MLP Classifier</option>
+                                                </optgroup>
+                                                <option value="custom">Custom Configuration</option>
                                             </select>
                                         </div>
                                     </div>
-                                    <div class="mb-4">
-                                        <label class="block text-gray-700 mb-2">Model Configuration (JSON)</label>
-                                        <textarea v-model="newPipeline.model_config" class="w-full px-3 py-2 border rounded-lg h-32 font-mono text-sm" placeholder='{"n_estimators": 100, "max_depth": 10, "random_state": 42}'></textarea>
-                                        <p class="text-xs text-gray-500 mt-1">Parameters depend on model type. See <a href="https://scikit-learn.org" target="_blank" class="text-purple-600 underline">scikit-learn docs</a></p>
+                                    
+                                    <!-- Model Configuration Presets -->
+                                    <div v-if="newPipeline.model_type && newPipeline.model_type !== 'custom'" class="mb-4 p-4 bg-blue-50 rounded-lg">
+                                        <label class="block text-gray-700 mb-2 font-bold">Configuration Preset: {{ newPipeline.model_type }}</label>
+                                        <p class="text-xs text-gray-600 mb-2">{{ modelPresets[newPipeline.model_type]?.description || 'Default configuration' }}</p>
+                                        <div class="grid grid-cols-2 gap-2 text-xs">
+                                            <div v-for="(value, key) in modelPresets[newPipeline.model_type]?.config" :key="key" class="bg-white p-2 rounded">
+                                                <span class="text-gray-500">{{ key }}:</span>
+                                                <span class="font-mono text-blue-600 ml-1">{{ value }}</span>
+                                            </div>
+                                        </div>
+                                        <textarea v-model="newPipeline.model_config" class="w-full px-3 py-2 border rounded-lg h-24 font-mono text-sm mt-2" placeholder='{}'></textarea>
+                                        <p class="text-xs text-gray-500 mt-1">You can customize the JSON configuration above</p>
                                     </div>
+                                    
+                                    <!-- Custom Configuration -->
+                                    <div v-if="newPipeline.model_type === 'custom'" class="mb-4">
+                                        <label class="block text-gray-700 mb-2">Model Class Path</label>
+                                        <input v-model="newPipeline.custom_model_path" type="text" class="w-full px-3 py-2 border rounded-lg" placeholder="sklearn.ensemble.RandomForestClassifier">
+                                        <label class="block text-gray-700 mt-3 mb-2">Model Configuration (JSON)</label>
+                                        <textarea v-model="newPipeline.model_config" class="w-full px-3 py-2 border rounded-lg h-32 font-mono text-sm" placeholder='{"n_estimators": 100, "max_depth": 10}'></textarea>
+                                        <p class="text-xs text-gray-500 mt-1">Full Python class path + parameters. See <a href="https://scikit-learn.org" target="_blank" class="text-purple-600 underline">scikit-learn docs</a></p>
+                                    </div>
+                                    
                                     <div class="flex justify-end space-x-2">
                                         <button type="button" @click="showCreatePipeline = false" class="px-4 py-2 border rounded-lg hover:bg-gray-100">Cancel</button>
                                         <button type="submit" class="gradient-bg text-white px-4 py-2 rounded-lg hover:opacity-90">Create</button>
@@ -231,7 +378,7 @@
                                         <p class="text-xs text-gray-400 mt-1">Created: {{ new Date(pipeline.created_at).toLocaleString() }}</p>
                                     </div>
                                     <div class="flex items-center space-x-2 ml-4">
-                                        <span :class="['px-2 py-1 rounded-full text-xs', 
+                                        <span :class="['px-2 py-1 rounded-full text-xs',
                                             pipeline.status === 'completed' ? 'bg-green-100 text-green-800' :
                                             pipeline.status === 'running' ? 'bg-yellow-100 text-yellow-800 status-running' :
                                             pipeline.status === 'failed' ? 'bg-red-100 text-red-800' : 'bg-gray-100 text-gray-800']">
@@ -338,58 +485,6 @@
                         </div>
                     </div>
 
-                    <!-- Data Tab -->
-                    <div v-if="activeTab === 'data'" class="p-6">
-                        <div class="flex justify-between items-center mb-6">
-                            <h2 class="text-xl font-bold">Uploaded Data</h2>
-                            <div class="flex items-center space-x-2">
-                                <label class="gradient-bg text-white px-4 py-2 rounded-lg cursor-pointer hover:opacity-90">
-                                    <i class="fas fa-upload mr-2"></i>Upload CSV/JSON
-                                    <input type="file" @change="uploadData" accept=".csv,.json,.parquet" class="hidden">
-                                </label>
-                            </div>
-                        </div>
-                        
-                        <!-- Upload Progress -->
-                        <div v-if="uploading" class="mb-4 bg-blue-50 border border-blue-200 rounded-lg p-4">
-                            <div class="flex items-center">
-                                <i class="fas fa-spinner fa-spin text-blue-600 mr-2"></i>
-                                <span>Uploading and analyzing data...</span>
-                            </div>
-                        </div>
-
-                        <!-- Data List -->
-                        <div class="space-y-4">
-                            <div v-for="data in uploadedData" :key="data.data_id" class="border rounded-lg p-4">
-                                <div class="flex justify-between items-start">
-                                    <div>
-                                        <h3 class="font-bold">{{ data.filename }}</h3>
-                                        <p class="text-sm text-gray-500">Format: {{ data.format }} | Rows: {{ data.schema?.row_count || 'N/A' }} | Columns: {{ data.schema?.column_count || data.schema?.columns?.length || 'N/A' }}</p>
-                                    </div>
-                                    <button @click="viewDataSchema(data.data_id)" class="bg-blue-500 text-white px-3 py-1 rounded text-sm hover:bg-blue-600">
-                                        <i class="fas fa-table mr-1"></i>View Schema
-                                    </button>
-                                </div>
-                                <!-- Expected Data Structure Info -->
-                                <div class="mt-3 bg-gray-50 rounded p-3">
-                                    <p class="text-xs text-gray-600 mb-2"><i class="fas fa-info-circle mr-1"></i>Expected format for training:</p>
-                                    <code class="text-xs bg-gray-800 text-green-400 p-2 rounded block overflow-x-auto">
-                                        {{ data.schema?.columns?.slice(0, 5).map(c => c.name).join(', ') }}, [target_column]
-                                    </code>
-                                    <p class="text-xs text-gray-500 mt-1">Each row should contain feature values followed by the target variable for prediction.</p>
-                                </div>
-                            </div>
-                            <div v-if="uploadedData.length === 0" class="text-center py-8 text-gray-500">
-                                <i class="fas fa-database text-4xl mb-2"></i>
-                                <p>No data uploaded yet. Upload a CSV or JSON file to get started.</p>
-                                <div class="mt-4 text-sm text-gray-400">
-                                    <p><strong>Supported formats:</strong> CSV, JSON, Parquet</p>
-                                    <p><strong>Structure:</strong> Tabular data with features + target column</p>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-
                     <!-- Activity Logs Tab -->
                     <div v-if="activeTab === 'logs'" class="p-6">
                         <div class="flex justify-between items-center mb-6">
@@ -410,258 +505,6 @@
                                 <p>No activity logs yet.</p>
                             </div>
                         </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- View Pipeline Modal -->
-        <div v-if="viewingPipeline" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 overflow-y-auto">
-            <div class="bg-white p-6 rounded-lg w-full max-w-4xl m-4 max-h-screen overflow-y-auto">
-                <div class="flex justify-between items-center mb-4">
-                    <h3 class="text-xl font-bold">Pipeline: {{ viewingPipeline.name }}</h3>
-                    <button @click="viewingPipeline = null" class="text-gray-500 hover:text-gray-700"><i class="fas fa-times text-xl"></i></button>
-                </div>
-                
-                <!-- Training Runs -->
-                <div class="mb-6">
-                    <h4 class="font-bold mb-2">Training Runs</h4>
-                    <div class="space-y-2">
-                        <div v-for="run in viewingPipeline.runs" :key="run.id" class="border rounded p-3">
-                            <div class="flex justify-between items-center">
-                                <span :class="['px-2 py-1 rounded text-xs',
-                                    run.status === 'completed' ? 'bg-green-100 text-green-800' :
-                                    run.status === 'running' ? 'bg-yellow-100 text-yellow-800' :
-                                    run.status === 'failed' ? 'bg-red-100 text-red-800' : 'bg-gray-100 text-gray-800']">
-                                    {{ run.status }}
-                                </span>
-                                <button @click="viewRunLogs(viewingPipeline.id, run.id)" class="text-blue-600 hover:underline text-sm">View Logs</button>
-                            </div>
-                            <p class="text-xs text-gray-500 mt-1">Started: {{ new Date(run.started_at).toLocaleString() }}</p>
-                            <div v-if="run.metrics" class="mt-2 grid grid-cols-4 gap-2 text-xs">
-                                <div v-if="run.metrics.accuracy" class="bg-blue-50 p-1 rounded text-center">Acc: {{ (run.metrics.accuracy * 100).toFixed(1) }}%</div>
-                                <div v-if="run.metrics.precision" class="bg-green-50 p-1 rounded text-center">Prec: {{ (run.metrics.precision * 100).toFixed(1) }}%</div>
-                                <div v-if="run.metrics.recall" class="bg-yellow-50 p-1 rounded text-center">Rec: {{ (run.metrics.recall * 100).toFixed(1) }}%</div>
-                                <div v-if="run.metrics.f1" class="bg-purple-50 p-1 rounded text-center">F1: {{ (run.metrics.f1 * 100).toFixed(1) }}%</div>
-                            </div>
-                            <p v-if="run.error_message" class="text-red-600 text-xs mt-1">{{ run.error_message }}</p>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- Run Pipeline Modal -->
-        <div v-if="showRunPipeline" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-            <div class="bg-white p-6 rounded-lg w-full max-w-md">
-                <h3 class="text-xl font-bold mb-4">Run Pipeline</h3>
-                <p class="text-gray-600 mb-4">Configure and start training...</p>
-                <div class="mb-4">
-                    <label class="block text-gray-700 mb-2">Model Type</label>
-                    <select v-model="runConfig.model_type" class="w-full px-3 py-2 border rounded-lg">
-                        <option value="random_forest">Random Forest</option>
-                        <option value="gradient_boosting">Gradient Boosting</option>
-                        <option value="logistic_regression">Logistic Regression</option>
-                        <option value="mlp">Neural Network (MLP)</option>
-                        <option value="svc">Support Vector Machine</option>
-                        <option value="knn">K-Nearest Neighbors</option>
-                    </select>
-                </div>
-                <div class="mb-4">
-                    <label class="block text-gray-700 mb-2">Target Column</label>
-                    <input v-model="runConfig.target_column" type="text" class="w-full px-3 py-2 border rounded-lg" placeholder="e.g., label">
-                </div>
-                <div class="mb-4">
-                    <label class="block text-gray-700 mb-2">Model Config (JSON)</label>
-                    <textarea v-model="runConfig.model_config" class="w-full px-3 py-2 border rounded-lg h-24 font-mono text-sm" placeholder='{"n_estimators": 100}'></textarea>
-                </div>
-                <div class="flex justify-end space-x-2">
-                    <button type="button" @click="showRunPipeline = null" class="px-4 py-2 border rounded-lg hover:bg-gray-100">Cancel</button>
-                    <button @click="executeRunPipeline" class="gradient-bg text-white px-4 py-2 rounded-lg hover:opacity-90">
-                        <i class="fas fa-play mr-2"></i>Start Training
-                    </button>
-                </div>
-            </div>
-        </div>
-
-        <!-- View Model Metrics Modal -->
-        <div v-if="viewingModel" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 overflow-y-auto">
-            <div class="bg-white p-6 rounded-lg w-full max-w-4xl m-4 max-h-screen overflow-y-auto">
-                <div class="flex justify-between items-center mb-4">
-                    <h3 class="text-xl font-bold">Model Metrics: {{ viewingModel.name }}</h3>
-                    <button @click="viewingModel = null" class="text-gray-500 hover:text-gray-700"><i class="fas fa-times text-xl"></i></button>
-                </div>
-                
-                <!-- Golden Signals -->
-                <div class="mb-6">
-                    <h4 class="font-bold mb-3"><i class="fas fa-heartbeat mr-2"></i>Golden Signals</h4>
-                    <div class="grid grid-cols-4 gap-4">
-                        <div class="bg-blue-50 p-4 rounded-lg">
-                            <p class="text-gray-500 text-sm">Latency (p50)</p>
-                            <p class="text-2xl font-bold text-blue-600">{{ modelMetrics.golden_signals?.latency?.p50?.toFixed(2) || 'N/A' }} ms</p>
-                        </div>
-                        <div class="bg-green-50 p-4 rounded-lg">
-                            <p class="text-gray-500 text-sm">Latency (p95)</p>
-                            <p class="text-2xl font-bold text-green-600">{{ modelMetrics.golden_signals?.latency?.p95?.toFixed(2) || 'N/A' }} ms</p>
-                        </div>
-                        <div class="bg-yellow-50 p-4 rounded-lg">
-                            <p class="text-gray-500 text-sm">Throughput</p>
-                            <p class="text-2xl font-bold text-yellow-600">{{ modelMetrics.golden_signals?.throughput?.toFixed(2) || 'N/A' }} /hr</p>
-                        </div>
-                        <div class="bg-purple-50 p-4 rounded-lg">
-                            <p class="text-gray-500 text-sm">Error Rate</p>
-                            <p class="text-2xl font-bold text-purple-600">{{ (modelMetrics.golden_signals?.error_rate * 100).toFixed(2) || '0.00' }}%</p>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Quality Metrics -->
-                <div class="mb-6">
-                    <h4 class="font-bold mb-3"><i class="fas fa-chart-bar mr-2"></i>Quality Metrics</h4>
-                    <div class="grid grid-cols-2 md:grid-cols-5 gap-4">
-                        <div v-if="viewingModel.metrics?.accuracy" class="bg-blue-100 p-4 rounded-lg text-center">
-                            <p class="text-gray-600 text-sm">Accuracy</p>
-                            <p class="text-2xl font-bold text-blue-600">{{ (viewingModel.metrics.accuracy * 100).toFixed(1) }}%</p>
-                        </div>
-                        <div v-if="viewingModel.metrics?.precision" class="bg-green-100 p-4 rounded-lg text-center">
-                            <p class="text-gray-600 text-sm">Precision</p>
-                            <p class="text-2xl font-bold text-green-600">{{ (viewingModel.metrics.precision * 100).toFixed(1) }}%</p>
-                        </div>
-                        <div v-if="viewingModel.metrics?.recall" class="bg-yellow-100 p-4 rounded-lg text-center">
-                            <p class="text-gray-600 text-sm">Recall</p>
-                            <p class="text-2xl font-bold text-yellow-600">{{ (viewingModel.metrics.recall * 100).toFixed(1) }}%</p>
-                        </div>
-                        <div v-if="viewingModel.metrics?.f1" class="bg-purple-100 p-4 rounded-lg text-center">
-                            <p class="text-gray-600 text-sm">F1 Score</p>
-                            <p class="text-2xl font-bold text-purple-600">{{ (viewingModel.metrics.f1 * 100).toFixed(1) }}%</p>
-                        </div>
-                        <div v-if="viewingModel.metrics?.training_time_seconds" class="bg-gray-100 p-4 rounded-lg text-center">
-                            <p class="text-gray-600 text-sm">Training Time</p>
-                            <p class="text-2xl font-bold text-gray-600">{{ viewingModel.metrics.training_time_seconds.toFixed(1) }}s</p>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Confusion Matrix -->
-                <div v-if="viewingModel.metrics?.confusion_matrix" class="mb-6">
-                    <h4 class="font-bold mb-3">Confusion Matrix</h4>
-                    <div class="overflow-x-auto">
-                        <table class="mx-auto border-collapse">
-                            <tr>
-                                <td class="p-2"></td>
-                                <td class="p-2 font-bold text-center">Predicted: 0</td>
-                                <td class="p-2 font-bold text-center">Predicted: 1</td>
-                            </tr>
-                            <tr>
-                                <td class="p-2 font-bold">Actual: 0</td>
-                                <td class="p-2 text-center bg-green-100 border">{{ viewingModel.metrics.confusion_matrix[0][0] }}</td>
-                                <td class="p-2 text-center bg-red-100 border">{{ viewingModel.metrics.confusion_matrix[0][1] }}</td>
-                            </tr>
-                            <tr>
-                                <td class="p-2 font-bold">Actual: 1</td>
-                                <td class="p-2 text-center bg-red-100 border">{{ viewingModel.metrics.confusion_matrix[1][0] }}</td>
-                                <td class="p-2 text-center bg-green-100 border">{{ viewingModel.metrics.confusion_matrix[1][1] }}</td>
-                            </tr>
-                        </table>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- Test Model Modal -->
-        <div v-if="testingModel" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-            <div class="bg-white p-6 rounded-lg w-full max-w-lg">
-                <div class="flex justify-between items-center mb-4">
-                    <h3 class="text-xl font-bold">Test Model Prediction</h3>
-                    <button @click="testingModel = null" class="text-gray-500 hover:text-gray-700"><i class="fas fa-times text-xl"></i></button>
-                </div>
-                <div class="mb-4">
-                    <label class="block text-gray-700 mb-2">Features (comma-separated values)</label>
-                    <textarea v-model="testFeatures" class="w-full px-3 py-2 border rounded-lg h-24" placeholder="0.5, 1.2, 3.4, 2.1, ..."></textarea>
-                    <p class="text-xs text-gray-500 mt-1">Enter {{ testDataFeatureCount || '20' }} feature values</p>
-                </div>
-                <div v-if="testResult" class="mb-4 p-4 bg-gray-50 rounded-lg">
-                    <p class="text-sm text-gray-600">Prediction: <span class="font-bold text-lg">{{ testResult.prediction }}</span></p>
-                    <p class="text-sm text-gray-600">Latency: {{ testResult.latency_ms }} ms</p>
-                    <div v-if="testResult.probabilities" class="mt-2">
-                        <p class="text-sm text-gray-600 mb-1">Probabilities:</p>
-                        <div class="flex gap-2">
-                            <span v-for="(prob, idx) in testResult.probabilities" :key="idx" class="px-2 py-1 bg-blue-100 rounded text-xs">
-                                Class {{ idx }}: {{ (prob * 100).toFixed(1) }}%
-                            </span>
-                        </div>
-                    </div>
-                </div>
-                <div class="flex justify-end">
-                    <button @click="executeTestPrediction" class="gradient-bg text-white px-4 py-2 rounded-lg hover:opacity-90">
-                        <i class="fas fa-vial mr-2"></i>Predict
-                    </button>
-                </div>
-            </div>
-        </div>
-
-        <!-- View Data Schema Modal -->
-        <div v-if="viewingDataSchema" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 overflow-y-auto">
-            <div class="bg-white p-6 rounded-lg w-full max-w-4xl m-4 max-h-screen overflow-y-auto">
-                <div class="flex justify-between items-center mb-4">
-                    <h3 class="text-xl font-bold">Data Schema</h3>
-                    <button @click="viewingDataSchema = null" class="text-gray-500 hover:text-gray-700"><i class="fas fa-times text-xl"></i></button>
-                </div>
-                <div class="overflow-x-auto">
-                    <table class="w-full border-collapse">
-                        <thead>
-                            <tr class="bg-gray-100">
-                                <th class="border p-2 text-left">Column</th>
-                                <th class="border p-2 text-left">Type</th>
-                                <th class="border p-2 text-left">Nullable</th>
-                                <th class="border p-2 text-left">Unique</th>
-                                <th class="border p-2 text-left">Min</th>
-                                <th class="border p-2 text-left">Max</th>
-                                <th class="border p-2 text-left">Mean</th>
-                                <th class="border p-2 text-left">Sample Values</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <tr v-for="col in dataSchema?.columns" :key="col.name">
-                                <td class="border p-2 font-mono">{{ col.name }}</td>
-                                <td class="border p-2">{{ col.dtype }}</td>
-                                <td class="border p-2">{{ col.nullable ? '✓' : '✗' }}</td>
-                                <td class="border p-2">{{ col.unique_values || 'N/A' }}</td>
-                                <td class="border p-2">{{ col.min ?? 'N/A' }}</td>
-                                <td class="border p-2">{{ col.max ?? 'N/A' }}</td>
-                                <td class="border p-2">{{ col.mean ?? 'N/A' }}</td>
-                                <td class="border p-2 text-xs">{{ JSON.stringify(col.sample_values) }}</td>
-                            </tr>
-                        </tbody>
-                    </table>
-                </div>
-                <div class="mt-4 p-4 bg-blue-50 rounded-lg">
-                    <p class="text-sm text-blue-800">
-                        <i class="fas fa-info-circle mr-2"></i>
-                        <strong>Training Data Format:</strong> Each row should contain all feature columns plus one target column. 
-                        Select the target column when creating a pipeline.
-                    </p>
-                </div>
-            </div>
-        </div>
-
-        <!-- Run Logs Modal -->
-        <div v-if="viewingRunLogs" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 overflow-y-auto">
-            <div class="bg-white p-6 rounded-lg w-full max-w-4xl m-4 max-h-screen overflow-y-auto">
-                <div class="flex justify-between items-center mb-4">
-                    <h3 class="text-xl font-bold">Training Run Logs</h3>
-                    <button @click="viewingRunLogs = null" class="text-gray-500 hover:text-gray-700"><i class="fas fa-times text-xl"></i></button>
-                </div>
-                <div class="bg-gray-900 rounded-lg p-4 max-h-96 overflow-y-auto font-mono text-sm">
-                    <div v-for="(log, idx) in runLogs" :key="idx" class="py-1" :class="{
-                        'text-green-400': log.level === 'success',
-                        'text-red-400': log.level === 'error',
-                        'text-yellow-400': log.level === 'warning',
-                        'text-blue-400': log.level === 'info',
-                        'text-gray-400': log.level === 'debug'
-                    }">
-                        <span class="text-gray-500">[{{ new Date(log.timestamp).toLocaleString() }}]</span>
-                        <span class="ml-2">{{ log.message }}</span>
                     </div>
                 </div>
             </div>
@@ -698,6 +541,8 @@
                     models: [],
                     uploadedData: [],
                     activityLogs: [],
+                    hdfsStatus: { status: 'not_configured' },
+                    hdfsFiles: { models: [], data: [] },
                     
                     // Modals
                     showCreatePipeline: false,
@@ -709,11 +554,27 @@
                     viewingRunLogs: null,
                     
                     // Forms
-                    newPipeline: { name: '', description: '', model_type: 'random_forest', data_path: '', target_column: '', model_config: '{}' },
+                    newPipeline: { name: '', description: '', model_type: '', data_path: '', target_column: '', model_config: '{}', custom_model_path: '' },
                     runConfig: { model_type: 'random_forest', target_column: '', model_config: '{}' },
                     testFeatures: '',
                     testResult: null,
                     testDataFeatureCount: 20,
+                    
+                    // Model presets
+                    modelPresets: {
+                        random_forest: { description: 'Ensemble of decision trees - great for most classification tasks', config: { n_estimators: 100, max_depth: 10, random_state: 42 } },
+                        gradient_boosting: { description: 'Sequential tree building - high accuracy, slower training', config: { n_estimators: 100, max_depth: 5, learning_rate: 0.1, random_state: 42 } },
+                        logistic_regression: { description: 'Linear model for binary/multiclass classification', config: { max_iter: 1000, random_state: 42 } },
+                        svc: { description: 'Support Vector Machine - good for high-dimensional spaces', config: { kernel: 'rbf', C: 1.0, gamma: 'scale' } },
+                        knn: { description: 'K-Nearest Neighbors - simple, instance-based learning', config: { n_neighbors: 5, weights: 'uniform' } },
+                        naive_bayes: { description: 'Probabilistic classifier based on Bayes theorem', config: {} },
+                        random_forest_regressor: { description: 'Random Forest for regression tasks', config: { n_estimators: 100, max_depth: 10, random_state: 42 } },
+                        gradient_boosting_regressor: { description: 'Gradient Boosting for regression', config: { n_estimators: 100, max_depth: 5, learning_rate: 0.1, random_state: 42 } },
+                        linear_regression: { description: 'Simple linear model for regression', config: {} },
+                        ridge: { description: 'Linear regression with L2 regularization', config: { alpha: 1.0 } },
+                        lasso: { description: 'Linear regression with L1 regularization', config: { alpha: 1.0 } },
+                        mlp: { description: 'Multi-layer Perceptron - neural network classifier', config: { hidden_layer_sizes: [100], max_iter: 500, random_state: 42 } }
+                    },
                     
                     // Upload
                     uploading: false,
@@ -726,14 +587,11 @@
             },
             
             async mounted() {
-                // Check if setup needed
                 try {
                     const setupResp = await fetch('/api/setup');
                     const setupData = await setupResp.json();
                     this.needsSetup = setupData.needs_setup;
-                } catch (e) {
-                    console.error('Setup check failed:', e);
-                }
+                } catch (e) { console.error('Setup check failed:', e); }
                 
                 if (this.token) {
                     try {
@@ -752,8 +610,7 @@
                     }
                 }
                 
-                // Auto-refresh stats
-                setInterval(this.loadStats, 10000);
+                setInterval(() => { this.loadStats(); this.loadHdfsFiles(); }, 10000);
             },
             
             methods: {
@@ -761,36 +618,23 @@
                     const headers = { 'Content-Type': 'application/json' };
                     if (this.token) headers['Authorization'] = `Bearer ${this.token}`;
                     const resp = await fetch(url, { ...options, headers: { ...headers, ...options.headers } });
-                    if (resp.status === 401) {
-                        this.logout();
-                        throw new Error('Unauthorized');
-                    }
+                    if (resp.status === 401) { this.logout(); throw new Error('Unauthorized'); }
                     return resp;
                 },
                 
                 async setupAdmin() {
                     try {
-                        const resp = await fetch('/api/setup', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ username: this.setupUsername, password: this.setupPassword })
-                        });
+                        const resp = await fetch('/api/setup', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: this.setupUsername, password: this.setupPassword }) });
                         const data = await resp.json();
                         if (!resp.ok) throw new Error(data.error);
                         this.needsSetup = false;
                         alert('Admin created! Please login.');
-                    } catch (e) {
-                        this.setupError = e.message;
-                    }
+                    } catch (e) { this.setupError = e.message; }
                 },
                 
                 async executeRegister() {
                     try {
-                        const resp = await fetch('/api/register', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ username: this.registerUsername, password: this.registerPassword })
-                        });
+                        const resp = await fetch('/api/register', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: this.registerUsername, password: this.registerPassword }) });
                         const data = await resp.json();
                         if (!resp.ok) throw new Error(data.error);
                         this.showRegister = false;
@@ -798,17 +642,12 @@
                         this.registerUsername = '';
                         this.registerPassword = '';
                         this.registerError = '';
-                    } catch (e) {
-                        this.registerError = e.message;
-                    }
+                    } catch (e) { this.registerError = e.message; }
                 },
                 
                 async login() {
                     try {
-                        const resp = await this.api('/api/login', {
-                            method: 'POST',
-                            body: JSON.stringify({ username: this.username, password: this.password })
-                        });
+                        const resp = await this.api('/api/login', { method: 'POST', body: JSON.stringify({ username: this.username, password: this.password }) });
                         const data = await resp.json();
                         if (!resp.ok) throw new Error(data.error);
                         this.token = data.token;
@@ -816,185 +655,103 @@
                         this.isLoggedIn = true;
                         localStorage.setItem('mlops_token', data.token);
                         this.loadAllData();
-                    } catch (e) {
-                        this.loginError = e.message;
-                        this.registerSuccess = '';
-                    }
+                    } catch (e) { this.loginError = e.message; this.registerSuccess = ''; }
                 },
                 
-                logout() {
-                    this.isLoggedIn = false;
-                    this.currentUser = '';
-                    this.token = null;
-                    localStorage.removeItem('mlops_token');
-                },
+                logout() { this.isLoggedIn = false; this.currentUser = ''; this.token = null; localStorage.removeItem('mlops_token'); },
                 
                 async loadAllData() {
-                    await Promise.all([this.loadStats(), this.loadPipelines(), this.loadModels(), this.loadLogs()]);
+                    await Promise.all([this.loadStats(), this.loadPipelines(), this.loadModels(), this.loadLogs(), this.loadHdfsFiles()]);
                 },
                 
                 async loadStats() {
-                    try {
-                        const resp = await this.api('/api/stats');
-                        this.stats = await resp.json();
-                    } catch (e) { console.error('Stats load failed:', e); }
+                    try { const resp = await this.api('/api/stats'); this.stats = await resp.json(); } catch (e) { console.error('Stats load failed:', e); }
                 },
                 
                 async loadPipelines() {
-                    try {
-                        const resp = await this.api('/api/pipelines');
-                        this.pipelines = await resp.json();
-                    } catch (e) { console.error('Pipelines load failed:', e); }
+                    try { const resp = await this.api('/api/pipelines'); this.pipelines = await resp.json(); } catch (e) { console.error('Pipelines load failed:', e); }
                 },
                 
                 async loadModels() {
-                    try {
-                        const resp = await this.api('/api/models');
-                        this.models = await resp.json();
-                    } catch (e) { console.error('Models load failed:', e); }
+                    try { const resp = await this.api('/api/models'); this.models = await resp.json(); } catch (e) { console.error('Models load failed:', e); }
                 },
                 
                 async loadLogs() {
+                    try { const resp = await this.api('/api/logs?limit=50'); this.activityLogs = await resp.json(); } catch (e) { console.error('Logs load failed:', e); }
+                },
+                
+                async loadHdfsFiles() {
                     try {
-                        const resp = await this.api('/api/logs?limit=50');
-                        this.activityLogs = await resp.json();
-                    } catch (e) { console.error('Logs load failed:', e); }
+                        const statusResp = await this.api('/api/hdfs/status');
+                        this.hdfsStatus = await statusResp.json();
+                        if (this.hdfsStatus.status === 'connected') {
+                            const filesResp = await this.api('/api/hdfs/files');
+                            this.hdfsFiles = await filesResp.json();
+                        }
+                    } catch (e) { console.error('HDFS load failed:', e); }
+                },
+                
+                onModelTypeChange() {
+                    if (this.newPipeline.model_type && this.newPipeline.model_type !== 'custom' && this.modelPresets[this.newPipeline.model_type]) {
+                        this.newPipeline.model_config = JSON.stringify(this.modelPresets[this.newPipeline.model_type].config, null, 2);
+                    }
                 },
                 
                 async uploadData(event) {
                     const file = event.target.files[0];
                     if (!file) return;
-                    
                     this.uploading = true;
                     const formData = new FormData();
                     formData.append('file', file);
-                    
                     try {
                         const resp = await this.api('/api/data/upload', { method: 'POST', body: formData });
                         const data = await resp.json();
                         if (!resp.ok) throw new Error(data.error);
                         this.uploadedData.push(data);
                         alert('Data uploaded successfully!');
-                    } catch (e) {
-                        alert('Upload failed: ' + e.message);
-                    } finally {
-                        this.uploading = false;
-                        event.target.value = '';
-                    }
+                    } catch (e) { alert('Upload failed: ' + e.message); }
+                    finally { this.uploading = false; event.target.value = ''; }
                 },
                 
                 async createPipeline() {
                     try {
-                        const config = JSON.parse(this.newPipeline.model_config || '{}');
-                        const resp = await this.api('/api/pipelines', {
-                            method: 'POST',
-                            body: JSON.stringify({
-                                name: this.newPipeline.name,
-                                description: this.newPipeline.description,
-                                model_type: this.newPipeline.model_type,
-                                model_config: config,
-                                data_path: this.newPipeline.data_path,
-                                target_column: this.newPipeline.target_column
-                            })
-                        });
+                        const config = this.newPipeline.model_type === 'custom' 
+                            ? JSON.parse(this.newPipeline.model_config || '{}')
+                            : (this.modelPresets[this.newPipeline.model_type]?.config || {});
+                        const modelType = this.newPipeline.model_type === 'custom' ? this.newPipeline.custom_model_path : this.newPipeline.model_type;
+                        const resp = await this.api('/api/pipelines', { method: 'POST', body: JSON.stringify({ name: this.newPipeline.name, description: this.newPipeline.description, model_type: modelType, model_config: config, data_path: this.newPipeline.data_path, target_column: this.newPipeline.target_column }) });
                         await resp.json();
                         this.showCreatePipeline = false;
-                        this.newPipeline = { name: '', description: '', model_type: 'random_forest', data_path: '', target_column: '', model_config: '{}' };
+                        this.newPipeline = { name: '', description: '', model_type: '', data_path: '', target_column: '', model_config: '{}', custom_model_path: '' };
                         this.loadPipelines();
-                    } catch (e) {
-                        alert('Failed: ' + e.message);
-                    }
+                    } catch (e) { alert('Failed: ' + e.message); }
                 },
                 
                 async executeRunPipeline() {
                     try {
                         const config = JSON.parse(this.runConfig.model_config || '{}');
-                        const resp = await this.api(`/api/pipelines/${this.showRunPipeline}/run`, {
-                            method: 'POST',
-                            body: JSON.stringify({
-                                model_type: this.runConfig.model_type,
-                                target_column: this.runConfig.target_column,
-                                model_config: config
-                            })
-                        });
+                        const resp = await this.api(`/api/pipelines/${this.showRunPipeline}/run`, { method: 'POST', body: JSON.stringify({ model_type: this.runConfig.model_type, target_column: this.runConfig.target_column, model_config: config }) });
                         await resp.json();
                         this.showRunPipeline = null;
                         this.runConfig = { model_type: 'random_forest', target_column: '', model_config: '{}' };
                         setTimeout(() => this.loadPipelines(), 2000);
-                    } catch (e) {
-                        alert('Failed: ' + e.message);
-                    }
+                    } catch (e) { alert('Failed: ' + e.message); }
                 },
                 
                 async viewPipeline(id) {
-                    try {
-                        const resp = await this.api(`/api/pipelines/${id}`);
-                        this.viewingPipeline = await resp.json();
-                    } catch (e) { alert('Failed: ' + e.message); }
+                    try { const resp = await this.api(`/api/pipelines/${id}`); this.viewingPipeline = await resp.json(); } catch (e) { alert('Failed: ' + e.message); }
                 },
                 
                 async viewRunLogs(pipelineId, runId) {
-                    try {
-                        const resp = await this.api(`/api/pipelines/${pipelineId}/runs/${runId}`);
-                        const data = await resp.json();
-                        this.runLogs = data.logs || [];
-                        this.viewingRunLogs = true;
-                    } catch (e) { alert('Failed: ' + e.message); }
+                    try { const resp = await this.api(`/api/pipelines/${pipelineId}/runs/${runId}`); const data = await resp.json(); this.runLogs = data.logs || []; this.viewingRunLogs = true; } catch (e) { alert('Failed: ' + e.message); }
                 },
                 
-                async deletePipeline(id) {
-                    if (!confirm('Delete this pipeline?')) return;
-                    try {
-                        await this.api(`/api/pipelines/${id}`, { method: 'DELETE' });
-                        this.loadPipelines();
-                    } catch (e) { alert('Failed: ' + e.message); }
-                },
-                
-                async viewModel(id) {
-                    try {
-                        const [modelResp, metricsResp] = await Promise.all([
-                            this.api(`/api/models/${id}`),
-                            this.api(`/api/models/${id}/metrics`)
-                        ]);
-                        this.viewingModel = await modelResp.json();
-                        this.modelMetrics = await metricsResp.json();
-                    } catch (e) { alert('Failed: ' + e.message); }
-                },
-                
-                testModel(id) {
-                    this.testingModel = id;
-                    this.testResult = null;
-                    this.testFeatures = '';
-                },
-                
-                async executeTestPrediction() {
-                    try {
-                        const features = this.testFeatures.split(',').map(x => parseFloat(x.trim()));
-                        const resp = await this.api(`/api/models/${this.testingModel}/predict`, {
-                            method: 'POST',
-                            body: JSON.stringify({ features })
-                        });
-                        this.testResult = await resp.json();
-                    } catch (e) {
-                        this.testResult = { error: e.message };
-                    }
-                },
-                
-                async deleteModel(id) {
-                    if (!confirm('Delete this model?')) return;
-                    try {
-                        await this.api(`/api/models/${id}`, { method: 'DELETE' });
-                        this.loadModels();
-                    } catch (e) { alert('Failed: ' + e.message); }
-                },
-                
-                async viewDataSchema(dataId) {
-                    try {
-                        const resp = await this.api(`/api/data/${dataId}/schema`);
-                        this.dataSchema = await resp.json();
-                        this.viewingDataSchema = true;
-                    } catch (e) { alert('Failed: ' + e.message); }
-                }
+                async deletePipeline(id) { if (!confirm('Delete this pipeline?')) return; try { await this.api(`/api/pipelines/${id}`, { method: 'DELETE' }); this.loadPipelines(); } catch (e) { alert('Failed: ' + e.message); } },
+                async viewModel(id) { try { const [modelResp, metricsResp] = await Promise.all([this.api(`/api/models/${id}`), this.api(`/api/models/${id}/metrics`)]); this.viewingModel = await modelResp.json(); this.modelMetrics = await metricsResp.json(); } catch (e) { alert('Failed: ' + e.message); } },
+                testModel(id) { this.testingModel = id; this.testResult = null; this.testFeatures = ''; },
+                async executeTestPrediction() { try { const features = this.testFeatures.split(',').map(x => parseFloat(x.trim())); const resp = await this.api(`/api/models/${this.testingModel}/predict`, { method: 'POST', body: JSON.stringify({ features }) }); this.testResult = await resp.json(); } catch (e) { this.testResult = { error: e.message }; } },
+                async deleteModel(id) { if (!confirm('Delete this model?')) return; try { await this.api(`/api/models/${id}`, { method: 'DELETE' }); this.loadModels(); } catch (e) { alert('Failed: ' + e.message); } },
+                async viewDataSchema(dataId) { try { const resp = await this.api(`/api/data/${dataId}/schema`); this.dataSchema = await resp.json(); this.viewingDataSchema = true; } catch (e) { alert('Failed: ' + e.message); } }
             }
         }).mount('#app');
     </script>

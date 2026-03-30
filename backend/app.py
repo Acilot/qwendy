@@ -37,11 +37,28 @@ from sqlalchemy.pool import StaticPool
 
 # HDFS (optional - for external cluster integration)
 HDFS_AVAILABLE = False
+hdfs_fs = None
 try:
-    import pyarrow.fs as hdfs_fs
+    import pyarrow.fs
+    hdfs_fs = pyarrow.fs
     HDFS_AVAILABLE = os.environ.get('HDFS_URL', '') != ''
 except ImportError:
     pass
+
+def get_hdfs_client():
+    """Get HDFS client if configured"""
+    if not HDFS_AVAILABLE or not hdfs_fs:
+        return None
+    try:
+        hdfs_url = os.environ.get('HDFS_URL', '')
+        if not hdfs_url:
+            return None
+        host = hdfs_url.replace('hdfs://', '').split(':')[0]
+        port = int(hdfs_url.split(':')[-1]) if ':' in hdfs_url else 9000
+        return hdfs_fs.HadoopFileSystem(host, port, user=os.environ.get('HDFS_USER', 'root'))
+    except Exception as e:
+        print(f"HDFS client error: {e}")
+        return None
 
 # GPU detection
 try:
@@ -415,9 +432,9 @@ def upload_data(current_user):
         }
         
         hdfs_path = None
-        if HDFS_AVAILABLE:
+        fs = get_hdfs_client()
+        if fs:
             try:
-                fs = hdfs_fs.HadoopFileSystem(app.config['HDFS_URL'].replace('hdfs://', '').split(':')[0], port=9000, user=app.config['HDFS_USER'])
                 hdfs_path = f"/mlops/data/{filename}"
                 with open(filepath, 'rb') as f:
                     fs.write_file(hdfs_path, f.read(), overwrite=True)
@@ -649,9 +666,9 @@ def run_pipeline(current_user, pipeline_id):
             logs.append({'timestamp': datetime.utcnow().isoformat(), 'level': 'info', 'message': f'Model saved to {model_path}'})
             
             hdfs_path = None
-            if HDFS_AVAILABLE:
+            fs = get_hdfs_client()
+            if fs:
                 try:
-                    fs = hdfs_fs.HadoopFileSystem(app.config['HDFS_URL'].replace('hdfs://', '').split(':')[0], port=9000, user=app.config['HDFS_USER'])
                     hdfs_path = f"/mlops/models/{model_filename}"
                     with open(model_path, 'rb') as f:
                         fs.write_file(hdfs_path, f.read(), overwrite=True)
@@ -932,12 +949,13 @@ def delete_model(current_user, model_id):
             model_path = Path(model.path)
             if model_path.exists():
                 model_path.unlink()
-            if model.hdfs_path and HDFS_AVAILABLE:
-                try:
-                    fs = hdfs_fs.HadoopFileSystem(app.config['HDFS_URL'].replace('hdfs://', '').split(':')[0], port=9000, user=app.config['HDFS_USER'])
-                    fs.delete_file(model.hdfs_path)
-                except:
-                    pass
+            if model.hdfs_path:
+                fs = get_hdfs_client()
+                if fs:
+                    try:
+                        fs.delete_file(model.hdfs_path)
+                    except:
+                        pass
             session.query(ModelMetrics).filter_by(model_id=model_id).delete()
             user = session.query(User).filter_by(username=current_user).first()
             log_activity(user.id if user else None, 'delete_model', 'model', model_id)
@@ -1007,14 +1025,57 @@ def get_stats(current_user):
 @app.route('/api/hdfs/status', methods=['GET'])
 @token_required
 def get_hdfs_status(current_user):
-    if HDFS_AVAILABLE:
+    fs = get_hdfs_client()
+    if fs:
         try:
-            fs = hdfs_fs.HadoopFileSystem(app.config['HDFS_URL'].replace('hdfs://', '').split(':')[0], port=9000, user=app.config['HDFS_USER'])
-            fs.get_file_info('/mlops')
-            return jsonify({'status': 'connected', 'url': app.config['HDFS_URL'], 'user': app.config['HDFS_USER']})
+            info = fs.get_file_info('/mlops')
+            return jsonify({'status': 'connected', 'url': os.environ.get('HDFS_URL', ''), 'user': os.environ.get('HDFS_USER', 'root'), 'web_ui': 'http://localhost:9870'})
         except Exception as e:
             return jsonify({'status': 'error', 'error': str(e)})
-    return jsonify({'status': 'not_configured', 'message': 'HDFS client not available. Using local storage.'})
+    return jsonify({'status': 'not_configured', 'message': 'HDFS not configured. Using local storage.'})
+
+@app.route('/api/hdfs/files', methods=['GET'])
+@token_required
+def list_hdfs_files(current_user):
+    """List files in HDFS /mlops directory"""
+    fs = get_hdfs_client()
+    if not fs:
+        return jsonify({'status': 'not_configured', 'files': []})
+    
+    try:
+        result = {'models': [], 'data': []}
+        
+        # List models
+        try:
+            models_selector = fs.get_file_selector('/mlops/models')
+            for info in models_selector.do_scan():
+                if info.is_file:
+                    result['models'].append({
+                        'name': info.base_name,
+                        'size': info.size,
+                        'modified': info.mtime.isoformat() if info.mtime else None,
+                        'path': info.path
+                    })
+        except:
+            pass
+        
+        # List data
+        try:
+            data_selector = fs.get_file_selector('/mlops/data')
+            for info in data_selector.do_scan():
+                if info.is_file:
+                    result['data'].append({
+                        'name': info.base_name,
+                        'size': info.size,
+                        'modified': info.mtime.isoformat() if info.mtime else None,
+                        'path': info.path
+                    })
+        except:
+            pass
+        
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({'status': 'error', 'error': str(e)})
 
 @app.route('/')
 @app.route('/<path:path>')
