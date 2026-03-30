@@ -73,8 +73,8 @@ CORS(app)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'mlops-secret-key-' + str(uuid.uuid4()))
 app.config['DATABASE_URL'] = os.environ.get('DATABASE_URL', 'postgresql://mlops:mlops@localhost:5432/mlops')
 app.config['MODELS_DIR'] = Path(os.environ.get('MODELS_DIR', '/workspace/models'))
-app.config['HDFS_URL'] = os.environ.get('HDFS_URL', 'hdfs://localhost:9000')
-app.config['HDFS_USER'] = os.environ.get('HDFS_USER', 'mlops')
+app.config['HDFS_URL'] = os.environ.get('HDFS_URL', 'hdfs://hdfs:9000')
+app.config['HDFS_USER'] = os.environ.get('HDFS_USER', 'root')
 app.config['DATA_DIR'] = Path(os.environ.get('DATA_DIR', '/workspace/data'))
 
 # Ensure directories exist
@@ -103,6 +103,7 @@ class Pipeline(Base):
     model_type = Column(String(64))
     model_config = Column(JSON)
     data_path = Column(String(256))
+    data_source = Column(String(32), default='local')  # local, hdfs, folder
     target_column = Column(String(64))
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -154,6 +155,19 @@ class ActivityLog(Base):
     resource_id = Column(String(36))
     details = Column(JSON)
 
+class DataSource(Base):
+    __tablename__ = 'data_sources'
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    name = Column(String(128), nullable=False)
+    path = Column(String(512), nullable=False)
+    source_type = Column(String(32), default='local')  # local, hdfs, folder, upload
+    format = Column(String(16))  # csv, json, parquet, txt, log
+    schema = Column(JSON)
+    row_count = Column(Integer)
+    column_count = Column(Integer)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    created_by = Column(String(36), ForeignKey('users.id'))
+
 # Database initialization
 db_session_factory = None
 try:
@@ -174,6 +188,7 @@ users_cache = {}
 pipelines_cache = {}
 models_cache = {}
 training_runs_cache = {}
+data_sources_cache = {}
 
 # Authentication decorator
 def token_required(f):
@@ -415,22 +430,39 @@ def upload_data(current_user):
     filepath = app.config['DATA_DIR'] / filename
     file.save(filepath)
     
+    # Analyze file
     try:
-        if ext == '.csv':
-            df = pd.read_csv(filepath, nrows=100)
-        elif ext in ['.json', '.jsonl']:
-            df = pd.read_json(filepath, nrows=100)
-        elif ext == '.parquet':
-            df = pd.read_parquet(filepath)[:100]
-        else:
-            return jsonify({'error': f'Unsupported format: {ext}'}), 400
+        schema = None
+        row_count = None
+        column_count = None
         
-        schema = {
-            'columns': [{'name': col, 'dtype': str(df[col].dtype), 'nullable': bool(df[col].isnull().any()), 'sample_values': df[col].dropna().head(3).tolist()} for col in df.columns],
-            'row_count': len(df),
-            'memory_usage': df.memory_usage(deep=True).sum()
-        }
+        if ext in ['.csv', '.json', '.parquet']:
+            if ext == '.csv':
+                df = pd.read_csv(filepath, nrows=100)
+            elif ext in ['.json', '.jsonl']:
+                df = pd.read_json(filepath, nrows=100)
+            elif ext == '.parquet':
+                df = pd.read_parquet(filepath)[:100]
+            
+            schema = {
+                'columns': [{'name': col, 'dtype': str(df[col].dtype), 'nullable': bool(df[col].isnull().any()), 'sample_values': df[col].dropna().head(3).tolist()} for col in df.columns],
+                'row_count': len(df),
+                'memory_usage': df.memory_usage(deep=True).sum()
+            }
+            row_count = len(df)
+            column_count = len(df.columns)
+        elif ext in ['.txt', '.log']:
+            with open(filepath, 'r', errors='ignore') as f:
+                lines = f.readlines()[:100]
+            schema = {
+                'columns': [{'name': 'text', 'dtype': 'object', 'nullable': False, 'sample_values': [l.strip()[:100] for l in lines[:3]]}],
+                'row_count': len(lines),
+                'format': 'text'
+            }
+            row_count = len(lines)
+            column_count = 1
         
+        # Save to HDFS if available
         hdfs_path = None
         fs = get_hdfs_client()
         if fs:
@@ -441,39 +473,364 @@ def upload_data(current_user):
             except Exception as e:
                 print(f"HDFS write failed: {e}")
         
+        # Save to database
+        session = get_db_session()
+        if session:
+            try:
+                user = session.query(User).filter_by(username=current_user).first()
+                data_source = DataSource(
+                    id=data_id,
+                    name=filename,
+                    path=str(filepath),
+                    source_type='upload',
+                    format=ext[1:] if ext else 'unknown',
+                    schema=schema,
+                    row_count=row_count,
+                    column_count=column_count,
+                    created_by=user.id if user else None
+                )
+                session.add(data_source)
+                session.commit()
+                session.close()
+            except Exception as e:
+                session.close()
+                print(f"Failed to save data source: {e}")
+        else:
+            data_sources_cache[data_id] = {
+                'data_id': data_id,
+                'filename': filename,
+                'path': str(filepath),
+                'hdfs_path': hdfs_path,
+                'source': 'local',
+                'schema': schema,
+                'format': ext[1:] if ext else 'unknown'
+            }
+        
         log_activity(current_user, 'upload_data', 'data', data_id, {'filename': filename})
-        return jsonify({'data_id': data_id, 'filename': filename, 'path': str(filepath), 'hdfs_path': hdfs_path, 'schema': schema, 'format': ext[1:]})
+        return jsonify({'data_id': data_id, 'filename': filename, 'path': str(filepath), 'hdfs_path': hdfs_path, 'schema': schema, 'format': ext[1:] if ext else 'unknown', 'source': 'local'})
     except Exception as e:
         return jsonify({'error': f'Failed to process file: {str(e)}'}), 400
 
+# Add data path (local, HDFS, folder)
+@app.route('/api/data/add-path', methods=['POST'])
+@token_required
+def add_data_path(current_user):
+    data = request.get_json()
+    path_type = data.get('type', 'local')
+    path = data.get('path')
+    name = data.get('name')
+    
+    if not path:
+        return jsonify({'error': 'Path required'}), 400
+    
+    data_id = str(uuid.uuid4())[:8]
+    
+    # Validate and analyze path
+    try:
+        schema = None
+        row_count = None
+        column_count = None
+        format_type = 'unknown'
+        actual_path = path
+        
+        if path_type == 'hdfs':
+            fs = get_hdfs_client()
+            if not fs:
+                return jsonify({'error': 'HDFS not configured'}), 400
+            
+            # Check if path exists in HDFS
+            try:
+                info = fs.get_file_info(path)
+                if not info.is_file:
+                    return jsonify({'error': 'Path is not a file'}), 400
+                
+                # Download file temporarily for analysis
+                with fs.open_input_stream(path) as f:
+                    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=Path(path).suffix)
+                    temp_file.write(f.read())
+                    temp_file.close()
+                    actual_path = temp_file.name
+                
+                # Analyze
+                ext = Path(path).suffix.lower()
+                if ext == '.csv':
+                    df = pd.read_csv(actual_path, nrows=100)
+                    format_type = 'csv'
+                elif ext in ['.json', '.jsonl']:
+                    df = pd.read_json(actual_path, nrows=100)
+                    format_type = 'json'
+                elif ext == '.parquet':
+                    df = pd.read_parquet(actual_path)[:100]
+                    format_type = 'parquet'
+                elif ext in ['.txt', '.log']:
+                    with open(actual_path, 'r', errors='ignore') as f:
+                        lines = f.readlines()[:100]
+                    schema = {'columns': [{'name': 'text', 'dtype': 'object', 'nullable': False, 'sample_values': [l.strip()[:100] for l in lines[:3]]}], 'row_count': len(lines), 'format': 'text'}
+                    row_count = len(lines)
+                    column_count = 1
+                    format_type = ext[1:]
+                else:
+                    os.unlink(actual_path)
+                    return jsonify({'error': f'Unsupported format: {ext}'}), 400
+                
+                if schema is None:
+                    schema = {
+                        'columns': [{'name': col, 'dtype': str(df[col].dtype), 'nullable': bool(df[col].isnull().any()), 'sample_values': df[col].dropna().head(3).tolist()} for col in df.columns],
+                        'row_count': len(df),
+                        'format': format_type
+                    }
+                    row_count = len(df)
+                    column_count = len(df.columns)
+                
+                os.unlink(actual_path)
+                
+            except Exception as e:
+                return jsonify({'error': f'HDFS path error: {str(e)}'}), 400
+        
+        elif path_type == 'folder':
+            folder_path = Path(path)
+            if not folder_path.exists() or not folder_path.is_dir():
+                return jsonify({'error': 'Folder does not exist'}), 400
+            
+            # Count files
+            txt_files = list(folder_path.glob('*.txt'))
+            log_files = list(folder_path.glob('*.log'))
+            total_files = len(txt_files) + len(log_files)
+            
+            if total_files == 0:
+                return jsonify({'error': 'No .txt or .log files in folder'}), 400
+            
+            # Sample first file for schema
+            sample_file = txt_files[0] if txt_files else log_files[0]
+            with open(sample_file, 'r', errors='ignore') as f:
+                lines = f.readlines()[:100]
+            
+            schema = {
+                'columns': [{'name': 'text', 'dtype': 'object', 'nullable': False, 'sample_values': [l.strip()[:100] for l in lines[:3]]}],
+                'row_count': sum(1 for _ in folder_path.glob('*.txt')) + sum(1 for _ in folder_path.glob('*.log')),
+                'file_count': total_files,
+                'format': 'folder'
+            }
+            row_count = schema['row_count']
+            column_count = 1
+            format_type = 'folder'
+        
+        else:  # local file
+            file_path = Path(path)
+            if not file_path.exists():
+                return jsonify({'error': 'File does not exist'}), 400
+            
+            ext = file_path.suffix.lower()
+            if ext == '.csv':
+                df = pd.read_csv(file_path, nrows=100)
+                format_type = 'csv'
+            elif ext in ['.json', '.jsonl']:
+                df = pd.read_json(file_path, nrows=100)
+                format_type = 'json'
+            elif ext == '.parquet':
+                df = pd.read_parquet(file_path)[:100]
+                format_type = 'parquet'
+            elif ext in ['.txt', '.log']:
+                with open(file_path, 'r', errors='ignore') as f:
+                    lines = f.readlines()[:100]
+                schema = {'columns': [{'name': 'text', 'dtype': 'object', 'nullable': False, 'sample_values': [l.strip()[:100] for l in lines[:3]]}], 'row_count': len(lines), 'format': 'text'}
+                row_count = len(lines)
+                column_count = 1
+                format_type = ext[1:]
+            else:
+                return jsonify({'error': f'Unsupported format: {ext}'}), 400
+            
+            if schema is None:
+                schema = {
+                    'columns': [{'name': col, 'dtype': str(df[col].dtype), 'nullable': bool(df[col].isnull().any()), 'sample_values': df[col].dropna().head(3).tolist()} for col in df.columns],
+                    'row_count': len(df),
+                    'format': format_type
+                }
+                row_count = len(df)
+                column_count = len(df.columns)
+        
+        # Save to database
+        session = get_db_session()
+        if session:
+            try:
+                user = session.query(User).filter_by(username=current_user).first()
+                data_source = DataSource(
+                    id=data_id,
+                    name=name or Path(path).name,
+                    path=path,
+                    source_type=path_type,
+                    format=format_type,
+                    schema=schema,
+                    row_count=row_count,
+                    column_count=column_count,
+                    created_by=user.id if user else None
+                )
+                session.add(data_source)
+                session.commit()
+                session.close()
+                
+                result = {
+                    'data_id': data_id,
+                    'filename': name or Path(path).name,
+                    'path': path,
+                    'source': path_type,
+                    'schema': schema,
+                    'format': format_type
+                }
+                return jsonify(result)
+            except Exception as e:
+                session.close()
+                return jsonify({'error': f'Database error: {str(e)}'}), 500
+        else:
+            result = {
+                'data_id': data_id,
+                'filename': name or Path(path).name,
+                'path': path,
+                'source': path_type,
+                'schema': schema,
+                'format': format_type
+            }
+            data_sources_cache[data_id] = result
+            return jsonify(result)
+    
+    except Exception as e:
+        return jsonify({'error': str(e)}), 400
+
+# List data sources
+@app.route('/api/data/list', methods=['GET'])
+@token_required
+def list_data_sources(current_user):
+    session = get_db_session()
+    if session:
+        try:
+            user = session.query(User).filter_by(username=current_user).first()
+            sources = session.query(DataSource).filter_by(created_by=user.id).all() if user else []
+            session.close()
+            return jsonify([{
+                'data_id': s.id,
+                'filename': s.name,
+                'path': s.path,
+                'source': s.source_type,
+                'format': s.format,
+                'schema': s.schema,
+                'row_count': s.row_count,
+                'column_count': s.column_count
+            } for s in sources])
+        except Exception:
+            session.close()
+            return jsonify([])
+    return jsonify(list(data_sources_cache.values()))
+
+# Get data schema
 @app.route('/api/data/<data_id>/schema', methods=['GET'])
 @token_required
 def get_data_schema(current_user, data_id):
-    data_file = list(app.config['DATA_DIR'].glob(f"data_{data_id}*"))
-    if not data_file:
-        return jsonify({'error': 'Data not found'}), 404
+    session = get_db_session()
+    if session:
+        try:
+            source = session.query(DataSource).filter_by(id=data_id).first()
+            if not source:
+                session.close()
+                return jsonify({'error': 'Data not found'}), 404
+            
+            # If it's a path type, re-analyze
+            if source.source_type in ['local', 'hdfs'] and source.schema:
+                session.close()
+                return jsonify(source.schema)
+            
+            # For folders, return folder schema
+            session.close()
+            return jsonify(source.schema)
+        except Exception as e:
+            session.close()
+            return jsonify({'error': str(e)}), 400
     
-    filepath = data_file[0]
-    ext = filepath.suffix.lower()
+    source = data_sources_cache.get(data_id)
+    if not source:
+        return jsonify({'error': 'Data not found'}), 404
+    return jsonify(source.get('schema', {}))
+
+# Delete data source
+@app.route('/api/data/<data_id>', methods=['DELETE'])
+@token_required
+def delete_data_source(current_user, data_id):
+    session = get_db_session()
+    if session:
+        try:
+            source = session.query(DataSource).filter_by(id=data_id).first()
+            if not source:
+                session.close()
+                return jsonify({'error': 'Data not found'}), 404
+            
+            # Don't delete HDFS or local path data, just remove from registry
+            session.delete(source)
+            session.commit()
+            session.close()
+            return jsonify({'message': 'Data source removed'})
+        except Exception as e:
+            session.close()
+            return jsonify({'error': str(e)}), 500
+    
+    if data_id in data_sources_cache:
+        del data_sources_cache[data_id]
+        return jsonify({'message': 'Data source removed'})
+    return jsonify({'error': 'Data not found'}), 404
+
+# HDFS status
+@app.route('/api/hdfs/status', methods=['GET'])
+@token_required
+def get_hdfs_status(current_user):
+    fs = get_hdfs_client()
+    if fs:
+        try:
+            info = fs.get_file_info('/mlops')
+            return jsonify({'status': 'connected', 'url': os.environ.get('HDFS_URL', ''), 'user': os.environ.get('HDFS_USER', 'root'), 'web_ui': 'http://localhost:9870'})
+        except Exception as e:
+            return jsonify({'status': 'error', 'error': str(e)})
+    return jsonify({'status': 'not_configured', 'message': 'HDFS not configured. Using local storage.'})
+
+@app.route('/api/hdfs/files', methods=['GET'])
+@token_required
+def list_hdfs_files(current_user):
+    """List files in HDFS /mlops directory"""
+    fs = get_hdfs_client()
+    if not fs:
+        return jsonify({'status': 'not_configured', 'files': []})
     
     try:
-        if ext == '.csv':
-            df = pd.read_csv(filepath)
-        elif ext in ['.json', '.jsonl']:
-            df = pd.read_json(filepath)
-        elif ext == '.parquet':
-            df = pd.read_parquet(filepath)
-        else:
-            return jsonify({'error': 'Unsupported format'}), 400
+        result = {'models': [], 'data': []}
         
-        schema = {
-            'columns': [{'name': col, 'dtype': str(df[col].dtype), 'nullable': bool(df[col].isnull().any()), 'unique_values': df[col].nunique(), 'min': float(df[col].min()) if pd.api.types.is_numeric_dtype(df[col]) else None, 'max': float(df[col].max()) if pd.api.types.is_numeric_dtype(df[col]) else None, 'mean': float(df[col].mean()) if pd.api.types.is_numeric_dtype(df[col]) else None} for col in df.columns],
-            'row_count': len(df),
-            'column_count': len(df.columns)
-        }
-        return jsonify(schema)
+        # List models
+        try:
+            models_selector = fs.get_file_selector('/mlops/models')
+            for info in models_selector.do_scan():
+                if info.is_file:
+                    result['models'].append({
+                        'name': info.base_name,
+                        'size': info.size,
+                        'modified': info.mtime.isoformat() if info.mtime else None,
+                        'path': info.path
+                    })
+        except:
+            pass
+        
+        # List data
+        try:
+            data_selector = fs.get_file_selector('/mlops/data')
+            for info in data_selector.do_scan():
+                if info.is_file:
+                    result['data'].append({
+                        'name': info.base_name,
+                        'size': info.size,
+                        'modified': info.mtime.isoformat() if info.mtime else None,
+                        'path': info.path
+                    })
+        except:
+            pass
+        
+        return jsonify(result)
     except Exception as e:
-        return jsonify({'error': str(e)}), 400
+        return jsonify({'status': 'error', 'error': str(e)})
 
 # Pipelines
 @app.route('/api/pipelines', methods=['GET'])
@@ -497,13 +854,13 @@ def create_pipeline(current_user):
     data = request.get_json()
     pipeline_id = str(uuid.uuid4())
     
-    pipeline_data = {'id': pipeline_id, 'name': data.get('name', f'Pipeline-{pipeline_id[:8]}'), 'description': data.get('description'), 'model_type': data.get('model_type'), 'model_config': data.get('model_config', {}), 'data_path': data.get('data_path'), 'target_column': data.get('target_column'), 'status': 'created', 'progress': 0, 'created_at': datetime.utcnow().isoformat(), 'created_by': current_user}
+    pipeline_data = {'id': pipeline_id, 'name': data.get('name', f'Pipeline-{pipeline_id[:8]}'), 'description': data.get('description'), 'model_type': data.get('model_type'), 'model_config': data.get('model_config', {}), 'data_path': data.get('data_path'), 'data_source': data.get('data_source', 'local'), 'target_column': data.get('target_column'), 'status': 'created', 'progress': 0, 'created_at': datetime.utcnow().isoformat(), 'created_by': current_user}
     
     session = get_db_session()
     if session:
         try:
             user = session.query(User).filter_by(username=current_user).first()
-            pipeline = Pipeline(id=pipeline_id, name=pipeline_data['name'], description=pipeline_data['description'], model_type=pipeline_data['model_type'], model_config=pipeline_data['model_config'], data_path=pipeline_data['data_path'], target_column=pipeline_data['target_column'], created_by=user.id if user else None)
+            pipeline = Pipeline(id=pipeline_id, name=pipeline_data['name'], description=pipeline_data['description'], model_type=pipeline_data['model_type'], model_config=pipeline_data['model_config'], data_path=pipeline_data['data_path'], data_source=pipeline_data['data_source'], target_column=pipeline_data['target_column'], created_by=user.id if user else None)
             session.add(pipeline)
             session.commit()
             session.close()
@@ -545,6 +902,46 @@ def load_user_model(model_type: str, model_config: dict):
         return model_classes[model_type](**model_config)
     return RandomForestClassifier(**model_config)
 
+def load_data_for_training(data_path: str, data_source: str, target_column: str):
+    """Load data from various sources"""
+    if data_source == 'hdfs':
+        fs = get_hdfs_client()
+        if not fs:
+            raise ValueError("HDFS not configured")
+        
+        # Download from HDFS to temp file
+        with fs.open_input_stream(data_path) as f:
+            temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=Path(data_path).suffix)
+            temp_file.write(f.read())
+            temp_file.close()
+            data_path = temp_file.name
+    
+    ext = Path(data_path).suffix.lower()
+    
+    if ext == '.csv':
+        df = pd.read_csv(data_path)
+    elif ext in ['.json', '.jsonl']:
+        df = pd.read_json(data_path)
+    elif ext == '.parquet':
+        df = pd.read_parquet(data_path)
+    elif ext in ['.txt', '.log']:
+        # For text files, create simple features (e.g., line length, word count)
+        with open(data_path, 'r', errors='ignore') as f:
+            lines = f.readlines()
+        df = pd.DataFrame({
+            'text': [l.strip() for l in lines],
+            'length': [len(l) for l in lines],
+            'word_count': [len(l.split()) for l in lines],
+            target_column: [1 if 'error' in l.lower() else 0 for l in lines]  # Simple label
+        })
+    else:
+        raise ValueError(f"Unsupported format: {ext}")
+    
+    if data_source == 'hdfs':
+        os.unlink(data_path)
+    
+    return df
+
 @app.route('/api/pipelines/<pipeline_id>/run', methods=['POST'])
 @token_required
 def run_pipeline(current_user, pipeline_id):
@@ -568,6 +965,7 @@ def run_pipeline(current_user, pipeline_id):
     model_type = data.get('model_type', pipeline.model_type or 'random_forest')
     model_config = data.get('model_config', pipeline.model_config or {})
     data_path = data.get('data_path', pipeline.data_path)
+    data_source = data.get('data_source', getattr(pipeline, 'data_source', 'local'))
     target_column = data.get('target_column', pipeline.target_column)
     
     if not data_path:
@@ -597,19 +995,9 @@ def run_pipeline(current_user, pipeline_id):
         try:
             logs.append({'timestamp': datetime.utcnow().isoformat(), 'level': 'info', 'message': 'Starting training pipeline'})
             
-            data_file = Path(data_path)
-            if not data_file.exists():
-                raise FileNotFoundError(f"Data file not found: {data_path}")
-            
-            ext = data_file.suffix.lower()
-            if ext == '.csv':
-                df = pd.read_csv(data_file)
-            elif ext in ['.json', '.jsonl']:
-                df = pd.read_json(data_file)
-            elif ext == '.parquet':
-                df = pd.read_parquet(data_file)
-            else:
-                raise ValueError(f"Unsupported format: {ext}")
+            # Load data
+            logs.append({'timestamp': datetime.utcnow().isoformat(), 'level': 'info', 'message': f'Loading data from {data_path} ({data_source})'})
+            df = load_data_for_training(data_path, data_source, target_column)
             
             logs.append({'timestamp': datetime.utcnow().isoformat(), 'level': 'info', 'message': f'Loaded {len(df)} rows, {len(df.columns)} columns'})
             
@@ -619,11 +1007,13 @@ def run_pipeline(current_user, pipeline_id):
             X = df.drop(columns=[target_column])
             y = df[target_column]
             
+            # Handle categorical variables
             categorical_cols = X.select_dtypes(include=['object', 'category']).columns
             if len(categorical_cols) > 0:
                 logs.append({'timestamp': datetime.utcnow().isoformat(), 'level': 'info', 'message': f'Encoding {len(categorical_cols)} categorical columns'})
                 X = pd.get_dummies(X, columns=categorical_cols, drop_first=True)
             
+            # Handle missing values
             if X.isnull().any().any():
                 logs.append({'timestamp': datetime.utcnow().isoformat(), 'level': 'warning', 'message': 'Filling missing values'})
                 for col in X.columns:
@@ -660,11 +1050,13 @@ def run_pipeline(current_user, pipeline_id):
             metrics['gpu_used'] = GPU_AVAILABLE
             logs.append({'timestamp': datetime.utcnow().isoformat(), 'level': 'info', 'message': f'Training completed in {metrics["training_time_seconds"]:.2f}s'})
             
+            # Save model
             model_filename = f"model_{run_id}.joblib"
             model_path = app.config['MODELS_DIR'] / model_filename
             joblib.dump(model, model_path)
             logs.append({'timestamp': datetime.utcnow().isoformat(), 'level': 'info', 'message': f'Model saved to {model_path}'})
             
+            # Save to HDFS
             hdfs_path = None
             fs = get_hdfs_client()
             if fs:
@@ -738,6 +1130,9 @@ def run_pipeline(current_user, pipeline_id):
     thread.start()
     return jsonify({'message': 'Pipeline started', 'pipeline_id': pipeline_id, 'run_id': run_id})
 
+# [Rest of the endpoints remain the same - get_pipeline, delete_pipeline, models, predict, stats, etc.]
+# For brevity, keeping the rest of the file same as before with the new data loading function
+
 @app.route('/api/pipelines/<pipeline_id>', methods=['GET'])
 @token_required
 def get_pipeline(current_user, pipeline_id):
@@ -748,7 +1143,7 @@ def get_pipeline(current_user, pipeline_id):
             if not pipeline:
                 session.close()
                 return jsonify({'error': 'Pipeline not found'}), 404
-            result = {'id': pipeline.id, 'name': pipeline.name, 'description': pipeline.description, 'status': pipeline.status, 'progress': pipeline.progress, 'model_type': pipeline.model_type, 'model_config': pipeline.model_config, 'data_path': pipeline.data_path, 'target_column': pipeline.target_column, 'created_at': pipeline.created_at.isoformat(), 'runs': [{'id': r.id, 'status': r.status, 'started_at': r.started_at.isoformat(), 'completed_at': r.completed_at.isoformat() if r.completed_at else None, 'metrics': r.metrics, 'error_message': r.error_message} for r in pipeline.runs.order_by(TrainingRun.started_at.desc())]}
+            result = {'id': pipeline.id, 'name': pipeline.name, 'description': pipeline.description, 'status': pipeline.status, 'progress': pipeline.progress, 'model_type': pipeline.model_type, 'model_config': pipeline.model_config, 'data_path': pipeline.data_path, 'data_source': pipeline.data_source, 'target_column': pipeline.target_column, 'created_at': pipeline.created_at.isoformat(), 'runs': [{'id': r.id, 'status': r.status, 'started_at': r.started_at.isoformat(), 'completed_at': r.completed_at.isoformat() if r.completed_at else None, 'metrics': r.metrics, 'error_message': r.error_message} for r in pipeline.runs.order_by(TrainingRun.started_at.desc())]}
             session.close()
             return jsonify(result)
         except Exception as e:
@@ -1022,61 +1417,6 @@ def get_stats(current_user):
     
     return jsonify({'total_pipelines': len(pipelines_cache), 'completed': sum(1 for p in pipelines_cache.values() if p.get('status') == 'completed'), 'running': sum(1 for p in pipelines_cache.values() if p.get('status') == 'running'), 'failed': sum(1 for p in pipelines_cache.values() if p.get('status') == 'failed'), 'total_models': len(models_cache), 'gpu_available': GPU_AVAILABLE, 'hdfs_available': HDFS_AVAILABLE})
 
-@app.route('/api/hdfs/status', methods=['GET'])
-@token_required
-def get_hdfs_status(current_user):
-    fs = get_hdfs_client()
-    if fs:
-        try:
-            info = fs.get_file_info('/mlops')
-            return jsonify({'status': 'connected', 'url': os.environ.get('HDFS_URL', ''), 'user': os.environ.get('HDFS_USER', 'root'), 'web_ui': 'http://localhost:9870'})
-        except Exception as e:
-            return jsonify({'status': 'error', 'error': str(e)})
-    return jsonify({'status': 'not_configured', 'message': 'HDFS not configured. Using local storage.'})
-
-@app.route('/api/hdfs/files', methods=['GET'])
-@token_required
-def list_hdfs_files(current_user):
-    """List files in HDFS /mlops directory"""
-    fs = get_hdfs_client()
-    if not fs:
-        return jsonify({'status': 'not_configured', 'files': []})
-    
-    try:
-        result = {'models': [], 'data': []}
-        
-        # List models
-        try:
-            models_selector = fs.get_file_selector('/mlops/models')
-            for info in models_selector.do_scan():
-                if info.is_file:
-                    result['models'].append({
-                        'name': info.base_name,
-                        'size': info.size,
-                        'modified': info.mtime.isoformat() if info.mtime else None,
-                        'path': info.path
-                    })
-        except:
-            pass
-        
-        # List data
-        try:
-            data_selector = fs.get_file_selector('/mlops/data')
-            for info in data_selector.do_scan():
-                if info.is_file:
-                    result['data'].append({
-                        'name': info.base_name,
-                        'size': info.size,
-                        'modified': info.mtime.isoformat() if info.mtime else None,
-                        'path': info.path
-                    })
-        except:
-            pass
-        
-        return jsonify(result)
-    except Exception as e:
-        return jsonify({'status': 'error', 'error': str(e)})
-
 @app.route('/')
 @app.route('/<path:path>')
 def serve_frontend(path='index.html'):
@@ -1090,6 +1430,7 @@ if __name__ == '__main__':
     print("=" * 60)
     print(f"GPU Available: {GPU_AVAILABLE}")
     print(f"HDFS Available: {HDFS_AVAILABLE}")
+    print(f"HDFS URL: {os.environ.get('HDFS_URL', 'not set')}")
     print(f"Database: {'PostgreSQL' if db_session_factory else 'In-memory (development)'}")
     print("=" * 60)
     app.run(host='0.0.0.0', port=5000, debug=True)

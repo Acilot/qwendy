@@ -152,7 +152,7 @@
                                 <i class="fas fa-robot mr-2"></i>Models
                             </button>
                             <button @click="activeTab = 'data'" :class="['px-4 py-3 font-medium whitespace-nowrap', activeTab === 'data' ? 'border-b-2 border-purple-500 text-purple-600' : 'text-gray-500 hover:text-gray-700']">
-                                <i class="fas fa-database mr-2"></i>Data
+                                <i class="fas fa-database mr-2"></i>Data Sources
                             </button>
                             <button @click="activeTab = 'hdfs'" :class="['px-4 py-3 font-medium whitespace-nowrap', activeTab === 'hdfs' ? 'border-b-2 border-purple-500 text-purple-600' : 'text-gray-500 hover:text-gray-700']">
                                 <i class="fas fa-folder-open mr-2"></i>HDFS Storage
@@ -166,11 +166,16 @@
                     <!-- Data Tab -->
                     <div v-if="activeTab === 'data'" class="p-6">
                         <div class="flex justify-between items-center mb-6">
-                            <h2 class="text-xl font-bold">Uploaded Data</h2>
-                            <label class="gradient-bg text-white px-4 py-2 rounded-lg cursor-pointer hover:opacity-90">
-                                <i class="fas fa-upload mr-2"></i>Upload CSV/JSON
-                                <input type="file" @change="uploadData" accept=".csv,.json,.parquet" class="hidden">
-                            </label>
+                            <h2 class="text-xl font-bold">Data Sources</h2>
+                            <div class="flex gap-2">
+                                <label class="gradient-bg text-white px-4 py-2 rounded-lg cursor-pointer hover:opacity-90">
+                                    <i class="fas fa-upload mr-2"></i>Upload File
+                                    <input type="file" @change="uploadData" accept=".csv,.json,.parquet,.txt,.log" class="hidden">
+                                </label>
+                                <button @click="showAddDataPath = true" class="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700">
+                                    <i class="fas fa-plus mr-2"></i>Add Path
+                                </button>
+                            </div>
                         </div>
                         
                         <!-- Upload Progress -->
@@ -186,30 +191,80 @@
                             <div v-for="data in uploadedData" :key="data.data_id" class="border rounded-lg p-4">
                                 <div class="flex justify-between items-start">
                                     <div>
-                                        <h3 class="font-bold">{{ data.filename }}</h3>
-                                        <p class="text-sm text-gray-500">Format: {{ data.format }} | Rows: {{ data.schema?.row_count || 'N/A' }} | Columns: {{ data.schema?.column_count || data.schema?.columns?.length || 'N/A' }}</p>
+                                        <div class="flex items-center gap-2">
+                                            <h3 class="font-bold">{{ data.filename }}</h3>
+                                            <span :class="['px-2 py-0.5 rounded text-xs', data.source === 'hdfs' ? 'bg-green-100 text-green-800' : 'bg-blue-100 text-blue-800']">
+                                                {{ data.source === 'hdfs' ? 'HDFS' : 'Local' }}
+                                            </span>
+                                        </div>
+                                        <p class="text-sm text-gray-500">
+                                            <span v-if="data.format">Format: {{ data.format }} |</span>
+                                            <span v-if="data.schema?.row_count">Rows: {{ data.schema.row_count }} |</span>
+                                            <span v-if="data.schema?.column_count || data.schema?.columns?.length">Columns: {{ data.schema?.column_count || data.schema?.columns?.length }}</span>
+                                        </p>
+                                        <p class="text-xs text-gray-400 mt-1">Path: {{ data.path }}</p>
                                     </div>
-                                    <button @click="viewDataSchema(data.data_id)" class="bg-blue-500 text-white px-3 py-1 rounded text-sm hover:bg-blue-600">
-                                        <i class="fas fa-table mr-1"></i>View Schema
-                                    </button>
+                                    <div class="flex items-center gap-2">
+                                        <button @click="viewDataSchema(data.data_id)" class="bg-blue-500 text-white px-3 py-1 rounded text-sm hover:bg-blue-600">
+                                            <i class="fas fa-table mr-1"></i>View Schema
+                                        </button>
+                                        <button v-if="data.source !== 'hdfs'" @click="deleteData(data.data_id)" class="bg-red-500 text-white px-3 py-1 rounded text-sm hover:bg-red-600">
+                                            <i class="fas fa-trash"></i>
+                                        </button>
+                                    </div>
                                 </div>
                                 <!-- Expected Data Structure Info -->
                                 <div class="mt-3 bg-gray-50 rounded p-3">
                                     <p class="text-xs text-gray-600 mb-2"><i class="fas fa-info-circle mr-1"></i>Expected format for training:</p>
                                     <code class="text-xs bg-gray-800 text-green-400 p-2 rounded block overflow-x-auto">
-                                        {{ data.schema?.columns?.slice(0, 5).map(c => c.name).join(', ') }}, [target_column]
+                                        {{ data.schema?.columns?.slice(0, 5).map(c => c.name).join(', ') }}<span v-if="data.schema?.columns?.length > 5">, ...</span>, [target_column]
                                     </code>
                                     <p class="text-xs text-gray-500 mt-1">Each row should contain feature values followed by the target variable for prediction.</p>
                                 </div>
                             </div>
                             <div v-if="uploadedData.length === 0" class="text-center py-8 text-gray-500">
                                 <i class="fas fa-database text-4xl mb-2"></i>
-                                <p>No data uploaded yet. Upload a CSV or JSON file to get started.</p>
+                                <p>No data sources added yet.</p>
                                 <div class="mt-4 text-sm text-gray-400">
-                                    <p><strong>Supported formats:</strong> CSV, JSON, Parquet</p>
-                                    <p><strong>Structure:</strong> Tabular data with features + target column</p>
+                                    <p><strong>Supported formats:</strong> CSV, JSON, Parquet, TXT, LOG</p>
+                                    <p><strong>Sources:</strong> Upload file, Local path, HDFS path, Folder (for logs)</p>
                                 </div>
                             </div>
+                        </div>
+                    </div>
+
+                    <!-- Add Data Path Modal -->
+                    <div v-if="showAddDataPath" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+                        <div class="bg-white p-6 rounded-lg w-full max-w-lg">
+                            <h3 class="text-xl font-bold mb-4">Add Data Source</h3>
+                            <form @submit.prevent="addDataPath">
+                                <div class="mb-4">
+                                    <label class="block text-gray-700 mb-2">Source Type</label>
+                                    <select v-model="newDataPath.type" class="w-full px-3 py-2 border rounded-lg">
+                                        <option value="local">Local File Path</option>
+                                        <option value="hdfs">HDFS Path</option>
+                                        <option value="folder">Folder (TXT/LOG files)</option>
+                                    </select>
+                                </div>
+                                <div class="mb-4">
+                                    <label class="block text-gray-700 mb-2">Path</label>
+                                    <input v-model="newDataPath.path" type="text" class="w-full px-3 py-2 border rounded-lg" 
+                                        :placeholder="newDataPath.type === 'hdfs' ? '/mlops/data/mydata.csv' : '/path/to/data.csv'" required>
+                                    <p class="text-xs text-gray-500 mt-1">
+                                        <span v-if="newDataPath.type === 'hdfs'">HDFS path (e.g., /mlops/data/file.csv)</span>
+                                        <span v-else-if="newDataPath.type === 'folder'">Folder path containing .txt or .log files</span>
+                                        <span v-else>Absolute or relative file path</span>
+                                    </p>
+                                </div>
+                                <div class="mb-4">
+                                    <label class="block text-gray-700 mb-2">Name (optional)</label>
+                                    <input v-model="newDataPath.name" type="text" class="w-full px-3 py-2 border rounded-lg" placeholder="My Dataset">
+                                </div>
+                                <div class="flex justify-end space-x-2">
+                                    <button type="button" @click="showAddDataPath = false" class="px-4 py-2 border rounded-lg hover:bg-gray-100">Cancel</button>
+                                    <button type="submit" class="gradient-bg text-white px-4 py-2 rounded-lg hover:opacity-90">Add</button>
+                                </div>
+                            </form>
                         </div>
                     </div>
 
@@ -236,6 +291,7 @@
                         </div>
                         <div v-else class="mb-6 bg-yellow-50 border border-yellow-200 rounded-lg p-4">
                             <p class="text-yellow-800"><i class="fas fa-exclamation-triangle mr-2"></i>{{ hdfsStatus.message || 'HDFS not configured' }}</p>
+                            <p class="text-sm text-yellow-600 mt-2">Check if HDFS container is running and backend HDFS_URL is set</p>
                         </div>
 
                         <!-- Models in HDFS -->
@@ -248,9 +304,9 @@
                                             <p class="font-mono text-sm">{{ file.name }}</p>
                                             <p class="text-xs text-gray-500">{{ (file.size / 1024).toFixed(2) }} KB</p>
                                         </div>
-                                        <a :href="hdfsStatus.web_ui + '/explorer.html#/mlops/models/' + file.name" target="_blank" class="text-blue-600 hover:underline text-sm">
-                                            <i class="fas fa-eye mr-1"></i>View
-                                        </a>
+                                        <button @click="addHdfsDataPath(file.path, 'model')" class="text-blue-600 hover:underline text-sm">
+                                            <i class="fas fa-plus mr-1"></i>Add to Data
+                                        </button>
                                     </div>
                                     <div v-if="hdfsFiles.models.length === 0" class="text-gray-500 text-sm text-center py-4">No models in HDFS</div>
                                 </div>
@@ -264,9 +320,9 @@
                                             <p class="font-mono text-sm">{{ file.name }}</p>
                                             <p class="text-xs text-gray-500">{{ (file.size / 1024).toFixed(2) }} KB</p>
                                         </div>
-                                        <a :href="hdfsStatus.web_ui + '/explorer.html#/mlops/data/' + file.name" target="_blank" class="text-blue-600 hover:underline text-sm">
-                                            <i class="fas fa-eye mr-1"></i>View
-                                        </a>
+                                        <button @click="addHdfsDataPath(file.path, 'data')" class="text-blue-600 hover:underline text-sm">
+                                            <i class="fas fa-plus mr-1"></i>Add to Data
+                                        </button>
                                     </div>
                                     <div v-if="hdfsFiles.data.length === 0" class="text-gray-500 text-sm text-center py-4">No data in HDFS</div>
                                 </div>
@@ -304,11 +360,12 @@
                                     </div>
                                     <div class="grid grid-cols-2 gap-4 mb-4">
                                         <div>
-                                            <label class="block text-gray-700 mb-2">Data File *</label>
+                                            <label class="block text-gray-700 mb-2">Data Source *</label>
                                             <select v-model="newPipeline.data_path" class="w-full px-3 py-2 border rounded-lg" required>
-                                                <option value="">Select uploaded data...</option>
-                                                <option v-for="d in uploadedData" :key="d.data_id" :value="d.path">{{ d.filename }}</option>
+                                                <option value="">Select data source...</option>
+                                                <option v-for="d in uploadedData" :key="d.data_id" :value="d.path">{{ d.filename }} ({{ d.source }})</option>
                                             </select>
+                                            <p class="text-xs text-gray-500 mt-1">Upload data or add path in Data Sources tab</p>
                                         </div>
                                         <div>
                                             <label class="block text-gray-700 mb-2">Model Type</label>
@@ -535,7 +592,7 @@
                     registerSuccess: '',
                     
                     // State
-                    activeTab: 'pipelines',
+                    activeTab: 'data',
                     stats: { total_pipelines: 0, completed: 0, running: 0, failed: 0, total_models: 0, avg_accuracy: 0, gpu_available: false },
                     pipelines: [],
                     models: [],
@@ -552,10 +609,12 @@
                     testingModel: null,
                     viewingDataSchema: null,
                     viewingRunLogs: null,
+                    showAddDataPath: false,
                     
                     // Forms
                     newPipeline: { name: '', description: '', model_type: '', data_path: '', target_column: '', model_config: '{}', custom_model_path: '' },
                     runConfig: { model_type: 'random_forest', target_column: '', model_config: '{}' },
+                    newDataPath: { type: 'local', path: '', name: '' },
                     testFeatures: '',
                     testResult: null,
                     testDataFeatureCount: 20,
@@ -599,7 +658,7 @@
                         if (payload.exp * 1000 > Date.now()) {
                             this.isLoggedIn = true;
                             this.currentUser = payload.username;
-                            this.loadAllData();
+                            await this.loadAllData();
                         } else {
                             localStorage.removeItem('mlops_token');
                             this.token = null;
@@ -610,7 +669,7 @@
                     }
                 }
                 
-                setInterval(() => { this.loadStats(); this.loadHdfsFiles(); }, 10000);
+                setInterval(() => { if (this.isLoggedIn) { this.loadStats(); this.loadHdfsFiles(); } }, 10000);
             },
             
             methods: {
@@ -654,14 +713,14 @@
                         this.currentUser = data.username;
                         this.isLoggedIn = true;
                         localStorage.setItem('mlops_token', data.token);
-                        this.loadAllData();
+                        await this.loadAllData();
                     } catch (e) { this.loginError = e.message; this.registerSuccess = ''; }
                 },
                 
                 logout() { this.isLoggedIn = false; this.currentUser = ''; this.token = null; localStorage.removeItem('mlops_token'); },
                 
                 async loadAllData() {
-                    await Promise.all([this.loadStats(), this.loadPipelines(), this.loadModels(), this.loadLogs(), this.loadHdfsFiles()]);
+                    await Promise.all([this.loadStats(), this.loadPipelines(), this.loadModels(), this.loadLogs(), this.loadHdfsFiles(), this.loadUploadedData()]);
                 },
                 
                 async loadStats() {
@@ -674,6 +733,10 @@
                 
                 async loadModels() {
                     try { const resp = await this.api('/api/models'); this.models = await resp.json(); } catch (e) { console.error('Models load failed:', e); }
+                },
+                
+                async loadUploadedData() {
+                    try { const resp = await this.api('/api/data/list'); this.uploadedData = await resp.json(); } catch (e) { console.error('Data load failed:', e); }
                 },
                 
                 async loadLogs() {
@@ -709,8 +772,49 @@
                         if (!resp.ok) throw new Error(data.error);
                         this.uploadedData.push(data);
                         alert('Data uploaded successfully!');
+                        await this.loadUploadedData();
                     } catch (e) { alert('Upload failed: ' + e.message); }
                     finally { this.uploading = false; event.target.value = ''; }
+                },
+                
+                async addDataPath() {
+                    try {
+                        const resp = await this.api('/api/data/add-path', {
+                            method: 'POST',
+                            body: JSON.stringify({
+                                type: this.newDataPath.type,
+                                path: this.newDataPath.path,
+                                name: this.newDataPath.name || null
+                            })
+                        });
+                        const data = await resp.json();
+                        if (!resp.ok) throw new Error(data.error);
+                        this.uploadedData.push(data);
+                        this.showAddDataPath = false;
+                        this.newDataPath = { type: 'local', path: '', name: '' };
+                        alert('Data source added!');
+                    } catch (e) { alert('Failed: ' + e.message); }
+                },
+                
+                async addHdfsDataPath(hdfsPath, type) {
+                    try {
+                        const resp = await this.api('/api/data/add-path', {
+                            method: 'POST',
+                            body: JSON.stringify({ type: 'hdfs', path: hdfsPath, name: null })
+                        });
+                        const data = await resp.json();
+                        if (!resp.ok) throw new Error(data.error);
+                        this.uploadedData.push(data);
+                        alert('HDFS data source added!');
+                    } catch (e) { alert('Failed: ' + e.message); }
+                },
+                
+                async deleteData(dataId) {
+                    if (!confirm('Remove this data source?')) return;
+                    try {
+                        await this.api(`/api/data/${dataId}`, { method: 'DELETE' });
+                        this.uploadedData = this.uploadedData.filter(d => d.data_id !== dataId);
+                    } catch (e) { alert('Failed: ' + e.message); }
                 },
                 
                 async createPipeline() {
